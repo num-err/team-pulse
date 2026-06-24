@@ -6,7 +6,7 @@ from the signal your team already produces — no forms, no Slack-bot nags, no
 get a pulse on the team without chasing anyone.
 
 > Status: early scaffold. The pieces below are wired up but most product logic
-> is still TODO.
+> is still TODOooo.
 
 ## Monorepo layout
 
