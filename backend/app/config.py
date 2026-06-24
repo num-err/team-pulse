@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     supabase_key: str = ""
     app_env: str = "development"
     github_webhook_secret: str = ""
+    anthropic_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
