@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     github_webhook_secret: str = ""
     anthropic_api_key: str = ""
+    slack_bot_token: str = ""
+    slack_default_channel: str = "#standup"
+    digest_cron_hour: int = 9
+    digest_cron_minute: int = 0
 
     model_config = SettingsConfigDict(
         env_file=".env",
