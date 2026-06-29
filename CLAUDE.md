@@ -2,7 +2,7 @@
 
 Zero-input async standup tool. Generates daily standup digests from signals the team already produces (GitHub activity, etc.) — no forms, no Slack-bot nags.
 
-**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler all complete and verified end-to-end. Live dashboard wired to real data. Next: additional integrations (Notion, Linear, Figma), auth, multi-actor digest.
+**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling all complete and verified end-to-end. Live dashboard wired to real data. Next: auth, multi-actor digest, production deployment.
 
 ---
 
@@ -44,6 +44,9 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-service-role-or-anon-key
 APP_ENV=development
 GITHUB_WEBHOOK_SECRET=        # needed for webhook HMAC verification
+LINEAR_WEBHOOK_SECRET=        # from Linear Settings → API → Webhooks → signing secret
+FIGMA_WEBHOOK_PASSCODE=       # any string you choose (set when registering Figma webhook)
+NOTION_TOKEN=                 # from notion.so/my-integrations → Internal Integration Secret
 ANTHROPIC_API_KEY=            # for /digest/generate
 SLACK_BOT_TOKEN=xoxb-...      # Slack bot token (see Slack Setup below)
 SLACK_DEFAULT_CHANNEL=        # channel ID (e.g. C0BDRS74RBL) — NOT the name
@@ -61,14 +64,18 @@ backend/app/
 │   ├── digest.py                   # POST /digest/generate
 │   ├── slack.py                    # POST /slack/deliver
 │   ├── scheduler.py                # GET /scheduler/status, POST /scheduler/run-now
+│   ├── notion.py                   # GET /notion/status, POST /notion/sync
 │   └── webhooks/
-│       └── github.py               # POST /webhooks/github
+│       ├── github.py               # POST /webhooks/github
+│       ├── linear.py               # POST /webhooks/linear
+│       └── figma.py                # POST /webhooks/figma (built, needs paid Figma plan)
 ├── integrations/
 │   └── supabase_client.py          # get_supabase() — cached Supabase client
 ├── services/
 │   ├── digest.py                   # generate_digest(actor) — core AI synthesis logic
 │   ├── slack.py                    # post_digest(digest, channel) — Slack Block Kit delivery
-│   └── scheduler.py                # run_daily_digests() — cron job, tracks last run state
+│   ├── scheduler.py                # run_daily_digests() — cron job, tracks last run state
+│   └── notion.py                   # sync_notion() — polls Notion Search API, deduplicates via last-sync timestamp
 └── models/
     ├── activity_event.py           # ActivityEvent Pydantic model
     └── standup.py                  # StandupEntry model
@@ -78,10 +85,14 @@ backend/app/
 - `GET /` → `{"name": "Team Pulse API", "version": "0.1.0"}`
 - `GET /health` → service status + supabase_configured flag
 - `POST /webhooks/github` → receives GitHub webhook events, normalizes, stores to Supabase
+- `POST /webhooks/linear` → receives Linear webhook events (HMAC-SHA256 via `Linear-Signature` header)
+- `POST /webhooks/figma` → receives Figma webhook events (passcode in payload body) — requires paid Figma plan to register
 - `POST /digest/generate?actor=<github-login>` → queries last 24h of events, calls Claude Haiku, returns summary JSON
 - `POST /slack/deliver?actor=<github-login>[&channel=<id>]` → generate + post to Slack, returns digest + `slack_ts`
 - `GET /scheduler/status` → last run time + per-actor results
 - `POST /scheduler/run-now` → manually trigger the daily digest job immediately
+- `GET /notion/status` → last Notion sync time + events stored
+- `POST /notion/sync` → manually trigger a Notion poll immediately
 
 ---
 
@@ -127,6 +138,14 @@ CREATE TABLE activity_events (
 ```
 
 The timestamp column is `received_at` (not `created_at`).
+
+**Event sources and types stored:**
+| source | event_type values |
+|---|---|
+| `github` | `pr_opened`, `pr_merged`, `pr_closed`, `commit_pushed` |
+| `linear` | `issue_created`, `issue_started`, `issue_completed`, `issue_cancelled`, `issue_updated`, `comment_added` |
+| `figma` | `file_comment`, `version_saved` |
+| `notion` | `page_created`, `page_edited` |
 
 ---
 
@@ -252,18 +271,80 @@ DIGEST_CRON_MINUTE=0
 
 **Manual trigger:** `POST /scheduler/run-now` — useful for testing without waiting for cron time.
 
+The Notion sync job is also wired into the lifespan scheduler and runs 5 minutes before the daily digest to ensure Notion activity is included.
+
+---
+
+## Linear Webhook Integration (complete)
+
+**What's built:**
+- `POST /webhooks/linear` in `backend/app/routes/webhooks/linear.py`
+- HMAC-SHA256 signature verification via `Linear-Signature` header (skipped when `LINEAR_WEBHOOK_SECRET` is empty)
+- Handles `Issue` events (create, update) and `Comment` events (create)
+
+**Event normalization rules:**
+- `Issue` / create → `issue_created` (actor = creator)
+- `Issue` / update + state.type "started" → `issue_started` (actor = assignee or creator)
+- `Issue` / update + state.type "completed" → `issue_completed`
+- `Issue` / update + state.type "cancelled" → `issue_cancelled`
+- `Issue` / update + other → `issue_updated`
+- `Comment` / create → `comment_added` (actor = commenter)
+
+**Actor:** Linear `displayName`. **Repo:** Linear team key (e.g. `ENG`).
+
+**To register:** Linear → Settings → API → Webhooks → New webhook → URL: `https://<ngrok>/webhooks/linear` → select Issues + Comments → copy signing secret → set `LINEAR_WEBHOOK_SECRET`.
+
+**Verified:** Test payload produced `issue_created` row in `activity_events`.
+
+---
+
+## Figma Webhook Integration (built, blocked on paid plan)
+
+**What's built:**
+- `POST /webhooks/figma` in `backend/app/routes/webhooks/figma.py`
+- Passcode verification (Figma embeds passcode in the JSON body rather than using an HMAC header)
+- Handles `FILE_COMMENT` → `file_comment` and `FILE_VERSION_UPDATE` → `version_saved`
+- Skips `FILE_UPDATE` (fires on every autosave — too noisy) and `PING`
+
+**Blocked:** Figma webhooks require a Professional (paid) plan. The endpoint is ready — once on a paid plan, register via:
+```bash
+curl -X POST https://api.figma.com/v2/webhooks \
+  -H "X-Figma-Token: <personal-access-token>" \
+  -d '{"event_type":"FILE_COMMENT","team_id":"<team-id>","endpoint":"https://<ngrok>/webhooks/figma","passcode":"<FIGMA_WEBHOOK_PASSCODE>"}'
+```
+
+---
+
+## Notion Integration (complete — polling)
+
+**Why polling:** Notion webhooks are not available on the free plan. Instead the scheduler polls the Notion Search API.
+
+**What's built:**
+- `backend/app/services/notion.py` → `sync_notion()` — polls `POST /v1/search` sorted by `last_edited_time`, resolves user IDs to display names, deduplicates via in-memory last-sync timestamp
+- `backend/app/routes/notion.py` → `GET /notion/status`, `POST /notion/sync`
+- Runs automatically 5 minutes before the daily digest via APScheduler
+
+**Setup:**
+1. Go to notion.so/my-integrations → New integration → copy the `secret_...` token
+2. Set `NOTION_TOKEN=secret_...` in `.env`
+3. In each Notion page/database: click `...` → Connections → connect your integration
+4. Pages edited since last sync are stored as `page_created` or `page_edited` events; actor is the Notion user display name
+
+**Verified:** Live sync produced `page_edited` row for actor `Numer Ahmed`.
+
 ---
 
 ## What's Next (not yet built)
 
 | Area | Detail |
 |---|---|
-| Additional integrations | Notion, Figma, Linear — each needs its own webhook/polling route and normalizer |
 | Auth | API key or GitHub OAuth middleware — who can request whose digest? |
 | Multi-actor digest | Team-level rollup across all actors for a given day |
 | Slack DMs | Send each actor their own digest as a DM (needs `users:read` + `im:write` scopes) |
-| Persistent scheduler state | APScheduler job state is in-memory — lost on restart. Use APScheduler's SQLAlchemy jobstore or a Supabase table to survive restarts |
+| Figma (unblocked) | Upgrade to Figma Professional plan to activate the already-built `/webhooks/figma` endpoint |
+| Persistent scheduler state | APScheduler + Notion sync state is in-memory — lost on restart. Use APScheduler's SQLAlchemy jobstore or a Supabase table to survive restarts |
 | Production deployment | Currently dev-only (uvicorn --reload + ngrok). Needs a real host (Railway, Fly.io, etc.) with persistent process + public webhook URL |
+| Actor identity mapping | GitHub login, Linear displayName, and Notion display name are all separate strings. A mapping table (or a settings page) would unify them so cross-source digests are attributed to the same person |
 
 ---
 

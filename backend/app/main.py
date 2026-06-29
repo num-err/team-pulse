@@ -5,8 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import health, digest, slack, scheduler
+from app.routes import health, digest, slack, scheduler, notion
 from app.routes.webhooks import github as github_webhook
+from app.routes.webhooks import figma as figma_webhook
+from app.routes.webhooks import linear as linear_webhook
+from app.services.notion import sync_notion
 from app.services.scheduler import run_daily_digests
 
 settings = get_settings()
@@ -21,6 +24,13 @@ async def lifespan(app: FastAPI):
         hour=settings.digest_cron_hour,
         minute=settings.digest_cron_minute,
         id="daily_digest",
+    )
+    _scheduler.add_job(
+        sync_notion,
+        "cron",
+        hour=settings.digest_cron_hour,
+        minute=max(0, settings.digest_cron_minute - 5),
+        id="notion_sync",
     )
     _scheduler.start()
     yield
@@ -44,6 +54,9 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(github_webhook.router)
+app.include_router(notion.router)
+app.include_router(linear_webhook.router)
+app.include_router(figma_webhook.router)
 app.include_router(digest.router)
 app.include_router(slack.router)
 app.include_router(scheduler.router)
