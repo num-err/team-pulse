@@ -2,7 +2,7 @@
 
 Zero-input async standup tool. Generates daily standup digests from signals the team already produces (GitHub activity, etc.) — no forms, no Slack-bot nags.
 
-**Status (2026-06-24):** GitHub webhook integration complete and verified with real events. AI synthesis engine live — `POST /digest/generate` calls Claude Haiku and returns plain-English standup summaries. Next: additional integrations, Slack delivery, scheduler, auth.
+**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler all complete and verified end-to-end. Live dashboard wired to real data. Next: additional integrations (Notion, Linear, Figma), auth, multi-actor digest.
 
 ---
 
@@ -21,13 +21,13 @@ team-pulse/
 **Run:**
 ```bash
 cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
+
+> Note: the venv was recreated at `/Users/numerahmed/Developer/team-pulse/backend/.venv` with Python 3.13 from Homebrew (`/opt/homebrew/bin/python3.13`). Use `.venv/bin/uvicorn` directly — `source .venv/bin/activate` may fail if the shell doesn't pick up the venv path correctly.
 
 - Health check: http://localhost:8000/health
 - Interactive docs: http://localhost:8000/docs
-- venv lives at `backend/.venv` — already created and deps installed
 
 **Key deps** (`requirements.txt`):
 - `fastapi==0.115.6`, `uvicorn[standard]==0.34.0`
@@ -35,29 +35,40 @@ uvicorn app.main:app --reload --port 8000
 - `pydantic==2.10.4`, `pydantic-settings==2.7.1`
 - `python-dotenv==1.0.1`
 - `anthropic>=0.40.0`
+- `slack_sdk>=3.27.0`
+- `apscheduler>=3.10.0`
 
 **Config** — copy `backend/.env.example` → `backend/.env` and fill in:
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-service-role-or-anon-key
 APP_ENV=development
-GITHUB_WEBHOOK_SECRET=   # needed for webhook HMAC verification
-ANTHROPIC_API_KEY=       # for /digest/generate
+GITHUB_WEBHOOK_SECRET=        # needed for webhook HMAC verification
+ANTHROPIC_API_KEY=            # for /digest/generate
+SLACK_BOT_TOKEN=xoxb-...      # Slack bot token (see Slack Setup below)
+SLACK_DEFAULT_CHANNEL=        # channel ID (e.g. C0BDRS74RBL) — NOT the name
+DIGEST_CRON_HOUR=9            # UTC hour to run daily digest (default 9)
+DIGEST_CRON_MINUTE=0          # UTC minute (default 0)
 ```
 
 **Structure:**
 ```
 backend/app/
-├── main.py                         # FastAPI app, CORS, router registration
+├── main.py                         # FastAPI app, CORS, lifespan (starts APScheduler)
 ├── config.py                       # Pydantic settings (reads .env via lru_cache)
 ├── routes/
 │   ├── health.py                   # GET /health
 │   ├── digest.py                   # POST /digest/generate
+│   ├── slack.py                    # POST /slack/deliver
+│   ├── scheduler.py                # GET /scheduler/status, POST /scheduler/run-now
 │   └── webhooks/
 │       └── github.py               # POST /webhooks/github
 ├── integrations/
 │   └── supabase_client.py          # get_supabase() — cached Supabase client
-├── services/                       # business logic (empty)
+├── services/
+│   ├── digest.py                   # generate_digest(actor) — core AI synthesis logic
+│   ├── slack.py                    # post_digest(digest, channel) — Slack Block Kit delivery
+│   └── scheduler.py                # run_daily_digests() — cron job, tracks last run state
 └── models/
     ├── activity_event.py           # ActivityEvent Pydantic model
     └── standup.py                  # StandupEntry model
@@ -67,7 +78,10 @@ backend/app/
 - `GET /` → `{"name": "Team Pulse API", "version": "0.1.0"}`
 - `GET /health` → service status + supabase_configured flag
 - `POST /webhooks/github` → receives GitHub webhook events, normalizes, stores to Supabase
-- `POST /digest/generate?actor=<github-login>` → queries last 24h of events for actor, calls Claude Haiku, returns summary JSON
+- `POST /digest/generate?actor=<github-login>` → queries last 24h of events, calls Claude Haiku, returns summary JSON
+- `POST /slack/deliver?actor=<github-login>[&channel=<id>]` → generate + post to Slack, returns digest + `slack_ts`
+- `GET /scheduler/status` → last run time + per-actor results
+- `POST /scheduler/run-now` → manually trigger the daily digest job immediately
 
 ---
 
@@ -79,16 +93,16 @@ cd frontend
 npm run dev    # port 3000
 ```
 
-- Deps already installed (`node_modules` present)
-- Config: copy `frontend/.env.local.example` → `frontend/.env.local`
-  - `NEXT_PUBLIC_API_URL=http://localhost:8000`
-
-**Key deps:** Next.js 14, React 18, Tailwind 3, shadcn/ui (card, button), lucide-react
-- Add shadcn components: `npx shadcn@latest add <component>`
+- `frontend/.env.local` already created with `NEXT_PUBLIC_API_URL=http://localhost:8000`
+- Shadcn components installed: `card`, `button` — add more with `npx shadcn@latest add <component>`
 
 **Pages:**
 - `/` → landing page (`app/page.tsx`) — headline + "Go to dashboard" button
-- `/dashboard` → (`app/dashboard/page.tsx`) — 3-column card grid (currently static mock data)
+- `/dashboard` → (`app/dashboard/page.tsx`) — live client component:
+  - GitHub username input → calls `POST /digest/generate` → renders AI summary card
+  - "Send to Slack" button per card → calls `POST /slack/deliver`
+  - "Refresh all" when 2+ actors loaded
+  - Loading / error / success states per card
 
 ---
 
@@ -153,9 +167,8 @@ Webhook registered on: `github.com/num-err/team-pulse` → Settings → Webhooks
 
 ## AI Synthesis Engine (complete)
 
-**Endpoint:** `POST /digest/generate?actor=<github-login>`
+**Core logic:** `backend/app/services/digest.py` → `generate_digest(actor)`
 
-**What it does:**
 1. Queries Supabase for all `activity_events` where `actor = ?` and `received_at >= now() - 24h`
 2. Formats events as a text list and sends to Claude Haiku (`claude-haiku-4-5`) via Anthropic SDK
 3. Returns a 2–4 sentence plain-English summary in third person
@@ -166,17 +179,78 @@ Webhook registered on: `github.com/num-err/team-pulse` → Settings → Webhooks
 **Response shape:**
 ```json
 {
-  "summary": "On 2026-06-24, num-err ...",
+  "summary": "On 2026-06-29, num-err ...",
   "actor": "num-err",
-  "date": "2026-06-24",
+  "date": "2026-06-29",
   "event_count": 6
 }
 ```
 
-**Implementation notes:**
+**Notes:**
 - `anthropic.Anthropic(api_key=get_settings().anthropic_api_key)` — key passed explicitly because uvicorn doesn't auto-load `.env` into `os.environ`
 - Model: `claude-haiku-4-5`, `max_tokens=256`
 - Returns 404 if no events found for actor in the last 24 hours
+
+---
+
+## Slack Delivery (complete)
+
+**Core logic:** `backend/app/services/slack.py` → `post_digest(digest, channel=None)`
+
+Posts a Block Kit message to Slack:
+- Header: "Team Pulse — {date}"
+- Body: actor name + AI summary
+- Footer: event count
+
+**Endpoint:** `POST /slack/deliver?actor=<github-login>[&channel=<channel-id>]`
+- Generates digest then delivers it in one call
+- Returns digest JSON + `slack_ts` (Slack message timestamp) + `delivered: true`
+- Returns 502 on Slack API error with the Slack error code in `detail`
+
+### Slack App Setup
+
+App name: **Teampulse** — created at api.slack.com/apps
+
+**Current bot token scopes (`chat:write` only):**
+| Scope | Purpose |
+|---|---|
+| `chat:write` | Post messages to channels the bot has been invited to |
+
+**To expand Slack capabilities in future, add these scopes:**
+| Scope | Needed for |
+|---|---|
+| `channels:read` | List public channels (to resolve names → IDs programmatically) |
+| `groups:read` | Same for private channels |
+| `users:read` | Look up users by email to send DMs |
+| `im:write` | Send direct messages to individual users |
+| `chat:write.public` | Post to channels without being invited first |
+
+**Important:** After adding any new scope, you must click **Reinstall to Workspace** on the OAuth & Permissions page to get a new token — the existing `xoxb-` token will not gain the new scope automatically.
+
+**Channel ID vs name:** The Slack SDK's `chat.postMessage` requires the channel ID (e.g. `C0BDRS74RBL`), not the name. To find a channel ID: open Slack in browser → navigate to channel → copy the `C...` segment from the URL. Set `SLACK_DEFAULT_CHANNEL` to the ID, not `#teampulse`.
+
+**Bot must be invited:** The bot must be a member of any channel it posts to. In the channel, type `/invite @Teampulse`.
+
+---
+
+## Scheduler (complete)
+
+**Core logic:** `backend/app/services/scheduler.py` → `run_daily_digests()`
+
+- Queries `activity_events` for distinct actors active in the last 24h (auto-discovery — no hardcoded list)
+- For each actor: calls `generate_digest()` then `post_digest()` to Slack
+- Per-actor error handling — one failure doesn't block others
+- Stores last run result in memory (`_last_run`) — visible via `GET /scheduler/status`
+
+**Wired via FastAPI lifespan** (`main.py`) — starts on server boot, shuts down cleanly on exit.
+
+**Config:**
+```
+DIGEST_CRON_HOUR=9    # UTC (default: 9 AM)
+DIGEST_CRON_MINUTE=0
+```
+
+**Manual trigger:** `POST /scheduler/run-now` — useful for testing without waiting for cron time.
 
 ---
 
@@ -185,11 +259,11 @@ Webhook registered on: `github.com/num-err/team-pulse` → Settings → Webhooks
 | Area | Detail |
 |---|---|
 | Additional integrations | Notion, Figma, Linear — each needs its own webhook/polling route and normalizer |
-| Slack delivery | Send the digest summary to a Slack channel or DM via Slack API |
-| Scheduler | Daily cron (e.g. APScheduler or a Supabase Edge Function) to call `/digest/generate` for each team member automatically |
-| Auth | Who can request whose digest? GitHub OAuth or API key middleware |
-| Dashboard with real data | Wire `app/dashboard/page.tsx` to call `POST /digest/generate` and display live summaries instead of mock data |
+| Auth | API key or GitHub OAuth middleware — who can request whose digest? |
 | Multi-actor digest | Team-level rollup across all actors for a given day |
+| Slack DMs | Send each actor their own digest as a DM (needs `users:read` + `im:write` scopes) |
+| Persistent scheduler state | APScheduler job state is in-memory — lost on restart. Use APScheduler's SQLAlchemy jobstore or a Supabase table to survive restarts |
+| Production deployment | Currently dev-only (uvicorn --reload + ngrok). Needs a real host (Railway, Fly.io, etc.) with persistent process + public webhook URL |
 
 ---
 
