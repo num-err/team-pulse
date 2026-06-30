@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     figma_webhook_passcode: str = ""
     notion_token: str = ""
     anthropic_api_key: str = ""
+    api_key: str = ""
     slack_bot_token: str = ""
     slack_default_channel: str = "#standup"
     digest_cron_hour: int = 9

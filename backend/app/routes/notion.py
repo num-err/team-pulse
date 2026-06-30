@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.deps import require_api_key
 from app.services.notion import sync_notion, _last_sync
 
-router = APIRouter(prefix="/notion", tags=["notion"])
+router = APIRouter(prefix="/notion", tags=["notion"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("/status")

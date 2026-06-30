@@ -29,12 +29,17 @@ interface SlackState {
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+
+function apiHeaders(): HeadersInit {
+  return API_KEY ? { "X-API-Key": API_KEY } : {};
+}
 
 async function fetchDigest(actor: string): Promise<DigestState> {
   try {
     const res = await fetch(
       `${API_URL}/digest/generate?actor=${encodeURIComponent(actor)}`,
-      { method: "POST" }
+      { method: "POST", headers: apiHeaders() }
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -51,7 +56,7 @@ async function sendToSlack(actor: string): Promise<{ ok: boolean; error?: string
   try {
     const res = await fetch(
       `${API_URL}/slack/deliver?actor=${encodeURIComponent(actor)}`,
-      { method: "POST" }
+      { method: "POST", headers: apiHeaders() }
     );
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));

@@ -1,8 +1,9 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.deps import require_api_key
 from app.services.scheduler import get_last_run, run_daily_digests
 
-router = APIRouter(prefix="/scheduler", tags=["scheduler"])
+router = APIRouter(prefix="/scheduler", tags=["scheduler"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("/status")

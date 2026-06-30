@@ -2,7 +2,7 @@
 
 Zero-input async standup tool. Generates daily standup digests from signals the team already produces (GitHub activity, etc.) — no forms, no Slack-bot nags.
 
-**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling all complete and verified end-to-end. Live dashboard wired to real data. Next: auth, multi-actor digest, production deployment.
+**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling → API key auth → multi-actor team digest all complete and verified end-to-end. Live dashboard wired to real data. Next: production deployment.
 
 ---
 
@@ -334,12 +334,71 @@ curl -X POST https://api.figma.com/v2/webhooks \
 
 ---
 
+## Auth (complete)
+
+**Dependency:** `backend/app/deps.py` → `require_api_key`
+
+Uses FastAPI's `APIKeyHeader` (`X-API-Key` header). Applied as a router-level dependency on all non-webhook routes:
+- `/digest/generate`, `/slack/deliver`, `/scheduler/*`, `/notion/*`
+
+Webhooks (`/webhooks/github`, `/webhooks/linear`, `/webhooks/figma`) stay unprotected — they use their own HMAC/passcode auth.
+
+**Behavior:**
+- `API_KEY` not set in `.env` → auth skipped (open in dev, preserves current behavior)
+- `API_KEY` set → header must match exactly, else `401 Unauthorized`
+
+**Generate a key:**
+```bash
+python -c "import secrets; print('tpulse_' + secrets.token_urlsafe(32))"
+```
+
+Add to `backend/.env`:
+```
+API_KEY=tpulse_<generated>
+```
+
+Add to `frontend/.env.local` (if using the dashboard against a keyed backend):
+```
+NEXT_PUBLIC_API_KEY=tpulse_<generated>
+```
+
+---
+
+## Multi-Actor Team Digest (complete)
+
+**Service:** `backend/app/services/team_digest.py` → `generate_team_digest()`
+
+1. Queries Supabase for distinct actors active in the last 24h
+2. Calls `generate_digest(actor)` for each → collects per-actor summaries
+3. Sends all summaries to Claude Haiku → generates a team-level rollup paragraph
+4. Returns structured response with both the rollup and per-actor details
+
+**Response shape:**
+```json
+{
+  "date": "2026-06-29",
+  "actor_count": 2,
+  "event_count": 8,
+  "team_summary": "The team made solid progress on...",
+  "actors": [
+    {"actor": "num-err", "summary": "...", "event_count": 6},
+    {"actor": "Numer Ahmed", "summary": "...", "event_count": 2}
+  ]
+}
+```
+
+**Endpoints:**
+- `POST /digest/team` → returns team digest JSON (auth required)
+- `POST /slack/deliver-team[?channel=<id>]` → generate + post to Slack as Block Kit message (auth required)
+
+**Slack format:** Header → team summary → divider → per-actor sections → footer with contributor/event count.
+
+---
+
 ## What's Next (not yet built)
 
 | Area | Detail |
 |---|---|
-| Auth | API key or GitHub OAuth middleware — who can request whose digest? |
-| Multi-actor digest | Team-level rollup across all actors for a given day |
 | Slack DMs | Send each actor their own digest as a DM (needs `users:read` + `im:write` scopes) |
 | Figma (unblocked) | Upgrade to Figma Professional plan to activate the already-built `/webhooks/figma` endpoint |
 | Persistent scheduler state | APScheduler + Notion sync state is in-memory — lost on restart. Use APScheduler's SQLAlchemy jobstore or a Supabase table to survive restarts |
