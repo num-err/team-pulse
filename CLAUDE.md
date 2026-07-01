@@ -2,7 +2,7 @@
 
 Zero-input async standup tool. Generates daily standup digests from signals the team already produces (GitHub activity, etc.) — no forms, no Slack-bot nags.
 
-**Status (2026-06-29):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling → API key auth → multi-actor team digest all complete and verified end-to-end. Live dashboard wired to real data. Next: production deployment.
+**Status (2026-07-01):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling → API key auth → multi-actor team digest all complete and verified end-to-end. Dashboard redesigned around the team digest as the primary flow, with a dark/gradient UI polished for live pitches (see Frontend section below). Next: production deployment.
 
 ---
 
@@ -104,16 +104,21 @@ cd frontend
 npm run dev    # port 3000
 ```
 
-- `frontend/.env.local` already created with `NEXT_PUBLIC_API_URL=http://localhost:8000`
-- Shadcn components installed: `card`, `button` — add more with `npx shadcn@latest add <component>`
+- `frontend/.env.local` has `NEXT_PUBLIC_API_URL=http://localhost:8000` and `NEXT_PUBLIC_API_KEY` (must match backend's `API_KEY` or authed routes 401)
+- Shadcn components installed: `card`, `button`, `badge` — add more with `npx shadcn@latest add <component>`
+- `framer-motion` and `lucide-react` used for animation/icons throughout
+
+**Design system (redesigned 2026-07-01):** dark theme forced on (`<html class="dark">` in `app/layout.tsx`), gradient-accent palette defined in `app/globals.css` (violet/sky gradients, `.glass`, `.glow-border`, `.gradient-text`, `.bg-grid` utility classes). Built for live pitch/demo settings — see `PITCH.md` (untracked, not in the repo) for the actual pitch script.
 
 **Pages:**
-- `/` → landing page (`app/page.tsx`) — headline + "Go to dashboard" button
-- `/dashboard` → (`app/dashboard/page.tsx`) — live client component:
-  - GitHub username input → calls `POST /digest/generate` → renders AI summary card
-  - "Send to Slack" button per card → calls `POST /slack/deliver`
-  - "Refresh all" when 2+ actors loaded
-  - Loading / error / success states per card
+- `/` → landing page (`app/page.tsx`) — animated hero, gradient headline, integrations strip (GitHub/Linear/Notion/Figma/Slack), feature cards
+- `/dashboard` → (`app/dashboard/page.tsx`) — team-digest-first live client component:
+  - "Generate team digest" button → calls `POST /digest/team` → renders team summary card + per-actor cards
+  - Per-actor cards use `ActorAvatar` (`components/actor-avatar.tsx`) — GitHub avatar image with initials-gradient fallback for non-GitHub actors
+  - "Send to Slack" per card (`POST /slack/deliver`) and for the whole team (`POST /slack/deliver-team`)
+  - Collapsible "Add a teammate manually" section preserves the original single-actor lookup flow (`POST /digest/generate`)
+  - Live API-connection indicator (pings `GET /health` on mount)
+  - Loading / error (no-activity-in-24h) / done states, animated with Framer Motion
 
 ---
 

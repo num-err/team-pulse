@@ -1,6 +1,9 @@
 .DS_Store
 *.log
 
+# Internal-only, not for the repo
+PITCH.md
+
 # Python
 __pycache__/
 *.py[cod]
