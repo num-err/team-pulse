@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ActorAvatar } from "@/components/actor-avatar";
 import { SourceIcons } from "@/components/source-icons";
-import { HealthBadge, type Health, type HealthState } from "@/components/health-badge";
+import { HealthHero, healthAccentColor, type Health, type HealthState } from "@/components/health-badge";
 
 interface ActorDigest {
   actor: string;
@@ -510,50 +510,55 @@ function ActorCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay }}
       whileHover={{ y: -3 }}
-      className="glass flex flex-col gap-3 rounded-xl p-5 transition-shadow hover:shadow-[0_0_0_1px_hsl(var(--primary)/0.3),0_8px_24px_-8px_hsl(var(--primary)/0.4)]"
+      className="glass relative flex flex-col gap-3 overflow-hidden rounded-xl py-5 pl-6 pr-5 transition-shadow hover:shadow-[0_0_0_1px_hsl(var(--primary)/0.3),0_8px_24px_-8px_hsl(var(--primary)/0.4)]"
     >
-      <div className="flex items-center gap-3">
-        <ActorAvatar actor={actor} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-medium">{actor}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            {health && <HealthBadge state={health.state} />}
-            {eventCount !== undefined && (
-              <Badge>
-                <Activity className="h-3 w-3" /> {eventCount} event{eventCount !== 1 ? "s" : ""}
-              </Badge>
-            )}
-            <SourceIcons sources={sources} />
-          </div>
-        </div>
+      {/* Fast at-a-glance color cue for scanning a whole grid of cards */}
+      <div className={`absolute inset-y-0 left-0 w-1 ${health ? healthAccentColor(health.state) : "bg-white/10"}`} />
+
+      <div className="flex items-center gap-2">
+        <ActorAvatar actor={actor} className="h-6 w-6 shrink-0" />
+        <p className="truncate text-xs text-muted-foreground">{actor}</p>
       </div>
+
+      {health && <HealthHero state={health.state} />}
 
       {loading && <p className="animate-pulse text-sm text-muted-foreground">Generating digest…</p>}
       {error && <p className="text-sm text-destructive">{error}</p>}
       {summary && <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>}
 
       {summary && (
-        <div className="mt-1 flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={slackState?.status === "sending" || slackState?.status === "sent"}
-            onClick={onSendSlack}
-          >
-            {slackState?.status === "sent" ? (
-              <>
-                <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-success" /> Sent
-              </>
-            ) : slackState?.status === "sending" ? (
-              "Sending…"
-            ) : (
-              <>
-                <Send className="mr-1.5 h-3.5 w-3.5" /> Send to Slack
-              </>
-            )}
-          </Button>
+        <div className="mt-1 flex flex-col gap-1.5 border-t border-white/5 pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+              {eventCount !== undefined && (
+                <span className="inline-flex shrink-0 items-center gap-1">
+                  <Activity className="h-3 w-3" /> {eventCount} event{eventCount !== 1 ? "s" : ""}
+                </span>
+              )}
+              <SourceIcons sources={sources} />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={slackState?.status === "sending" || slackState?.status === "sent"}
+              onClick={onSendSlack}
+              className="shrink-0"
+            >
+              {slackState?.status === "sent" ? (
+                <>
+                  <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-success" /> Sent
+                </>
+              ) : slackState?.status === "sending" ? (
+                "Sending…"
+              ) : (
+                <>
+                  <Send className="mr-1.5 h-3.5 w-3.5" /> Send to Slack
+                </>
+              )}
+            </Button>
+          </div>
           {slackState?.status === "error" && (
-            <span className="text-xs text-destructive">{slackState.error}</span>
+            <span className="text-right text-xs text-destructive">{slackState.error}</span>
           )}
         </div>
       )}
