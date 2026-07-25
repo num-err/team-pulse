@@ -31,19 +31,24 @@ def _normalize_pr(payload: dict) -> ActivityEvent | None:
         return None
 
     repo = payload.get("repository", {})
+    repo_name = repo.get("full_name", "")
+    pr_number = pr.get("number")
     return ActivityEvent(
         source="github",
         event_type=event_type,
         actor=pr.get("user", {}).get("login", ""),
-        repo=repo.get("full_name", ""),
+        repo=repo_name,
         title=pr.get("title"),
         url=pr.get("html_url"),
         metadata={
-            "pr_number": pr.get("number"),
+            "pr_number": pr_number,
             "base": pr.get("base", {}).get("ref"),
             "head": pr.get("head", {}).get("ref"),
             "draft": pr.get("draft", False),
         },
+        # PR number + event_type is stable across GitHub's own webhook retries
+        # (redelivery of the same "opened"/"closed" action for the same PR).
+        dedup_key=f"github:pr:{repo_name}:{pr_number}:{event_type}",
     )
 
 
@@ -56,6 +61,7 @@ def _normalize_push(payload: dict) -> list[ActivityEvent]:
     events = []
     for commit in payload.get("commits", []):
         message = commit.get("message", "").splitlines()[0]
+        sha = commit.get("id")
         events.append(
             ActivityEvent(
                 source="github",
@@ -65,11 +71,13 @@ def _normalize_push(payload: dict) -> list[ActivityEvent]:
                 title=message,
                 url=commit.get("url"),
                 metadata={
-                    "sha": commit.get("id"),
+                    "sha": sha,
                     "ref": ref,
                     "added": commit.get("added", []),
                     "modified": commit.get("modified", []),
                 },
+                # Commit SHA is already globally stable — no event_type needed.
+                dedup_key=f"github:commit:{repo_name}:{sha}",
             )
         )
     return events
@@ -104,6 +112,8 @@ async def github_webhook(
 
     if events:
         supabase = get_supabase()
-        supabase.table("activity_events").insert(
-            [e.model_dump() for e in events]
+        supabase.table("activity_events").upsert(
+            [e.model_dump() for e in events],
+            on_conflict="dedup_key",
+            ignore_duplicates=True,
         ).execute()

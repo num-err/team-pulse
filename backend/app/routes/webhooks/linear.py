@@ -41,6 +41,11 @@ def _normalize_issue(action: str, data: dict) -> ActivityEvent | None:
         return None
 
     team = data.get("team") or {}
+    entity_id = data.get("id") or data.get("identifier") or ""
+    # updatedAt bumps on every real change to the issue, so a webhook retry of
+    # the exact same delivery (same updatedAt) dedupes, while two genuinely
+    # different updates to the same issue (different updatedAt) don't collide.
+    version_stamp = data.get("updatedAt") or data.get("createdAt") or ""
     return ActivityEvent(
         source="linear",
         event_type=event_type,
@@ -53,6 +58,7 @@ def _normalize_issue(action: str, data: dict) -> ActivityEvent | None:
             "priority": data.get("priority"),
             "state": (data.get("state") or {}).get("name"),
         },
+        dedup_key=f"linear:issue:{entity_id}:{event_type}:{version_stamp}",
     )
 
 
@@ -63,6 +69,7 @@ def _normalize_comment(action: str, data: dict) -> ActivityEvent | None:
     issue = data.get("issue") or {}
     team = issue.get("team") or {}
     body = data.get("body") or ""
+    comment_id = data.get("id") or ""
     return ActivityEvent(
         source="linear",
         event_type="comment_added",
@@ -74,6 +81,8 @@ def _normalize_comment(action: str, data: dict) -> ActivityEvent | None:
             "issue_identifier": issue.get("identifier"),
             "issue_title": issue.get("title"),
         },
+        # Comment's own id is stable and only fires on create — safe to key on alone.
+        dedup_key=f"linear:comment:{comment_id}",
     )
 
 
@@ -103,4 +112,8 @@ async def linear_webhook(
 
     if event:
         supabase = get_supabase()
-        supabase.table("activity_events").insert(event.model_dump()).execute()
+        supabase.table("activity_events").upsert(
+            event.model_dump(),
+            on_conflict="dedup_key",
+            ignore_duplicates=True,
+        ).execute()

@@ -19,6 +19,7 @@ def _normalize_comment(payload: dict) -> ActivityEvent:
     text = " ".join(p.get("text", "") for p in comment_parts if isinstance(p, dict)).strip()
 
     triggered_by = payload.get("triggered_by") or {}
+    comment_id = payload.get("comment_id")
     return ActivityEvent(
         source="figma",
         event_type="file_comment",
@@ -28,15 +29,17 @@ def _normalize_comment(payload: dict) -> ActivityEvent:
         url=f"https://www.figma.com/file/{payload.get('file_key')}",
         metadata={
             "file_key": payload.get("file_key"),
-            "comment_id": payload.get("comment_id"),
+            "comment_id": comment_id,
             "parent_id": payload.get("parent_id"),
         },
+        dedup_key=f"figma:comment:{comment_id}",
     )
 
 
 def _normalize_version(payload: dict) -> ActivityEvent:
     triggered_by = payload.get("triggered_by") or {}
     label = payload.get("label") or payload.get("description") or "Unnamed version"
+    version_id = payload.get("version_id")
     return ActivityEvent(
         source="figma",
         event_type="version_saved",
@@ -46,9 +49,10 @@ def _normalize_version(payload: dict) -> ActivityEvent:
         url=f"https://www.figma.com/file/{payload.get('file_key')}",
         metadata={
             "file_key": payload.get("file_key"),
-            "version_id": payload.get("version_id"),
+            "version_id": version_id,
             "description": payload.get("description"),
         },
+        dedup_key=f"figma:version:{version_id}",
     )
 
 
@@ -74,4 +78,8 @@ async def figma_webhook(request: Request):
 
     if event:
         supabase = get_supabase()
-        supabase.table("activity_events").insert(event.model_dump()).execute()
+        supabase.table("activity_events").upsert(
+            event.model_dump(),
+            on_conflict="dedup_key",
+            ignore_duplicates=True,
+        ).execute()
