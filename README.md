@@ -4,6 +4,7 @@
 from the signal your team already produces — no forms, no Slack-bot nags, no
 "what did you do yesterday?" rituals. Members get an automatic digest; managers
 get a pulse on the team without chasing anyone.
+And this is test number 2
 
 > Status: early scaffold. The pieces below are wired up but most product logic
 > is still TODOooo.
