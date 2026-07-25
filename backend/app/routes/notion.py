@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.deps import require_api_key
-from app.services.notion import sync_notion, _last_sync
+from app.services.notion import get_last_sync, sync_notion
 
 router = APIRouter(prefix="/notion", tags=["notion"], dependencies=[Depends(require_api_key)])
 
 
 @router.get("/status")
 def notion_status():
-    return {"last_sync": _last_sync}
+    return {"last_sync": get_last_sync()}
 
 
 @router.post("/sync")

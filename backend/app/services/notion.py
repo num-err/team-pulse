@@ -6,14 +6,41 @@ import httpx
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
+from app.services.job_runs import get_last_run as _get_last_run_record
+from app.services.job_runs import record_run
 
 logger = logging.getLogger(__name__)
 
 _NOTION_API = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 
-_last_sync: dict | None = None
-_last_sync_at: datetime | None = None
+JOB_NAME = "notion_sync"
+
+
+def get_last_sync() -> dict | None:
+    return _get_last_run_record(JOB_NAME)
+
+
+def _synced_floor() -> datetime | None:
+    """Latest received_at already stored for source='notion', or None if empty.
+
+    Derived from Supabase rather than an in-memory timestamp so the dedup
+    floor survives a process restart instead of resetting to None and
+    re-walking (and re-inserting) all of Notion's history.
+    """
+    supabase = get_supabase()
+    result = (
+        supabase.table("activity_events")
+        .select("received_at")
+        .eq("source", "notion")
+        .order("received_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return None
+    return datetime.fromisoformat(rows[0]["received_at"].replace("Z", "+00:00"))
 
 
 def _headers(token: str) -> dict:
@@ -50,15 +77,13 @@ def _resolve_user(client: httpx.Client, token: str, user_id: str, cache: dict) -
 
 
 def sync_notion() -> dict:
-    global _last_sync, _last_sync_at
-
     settings = get_settings()
     token = settings.notion_token
     if not token:
         return {"error": "NOTION_TOKEN not configured", "events_stored": 0}
 
     sync_started_at = datetime.now(timezone.utc)
-    since = _last_sync_at
+    since = _synced_floor()
     user_cache: dict[str, str] = {}
     events: list[ActivityEvent] = []
 
@@ -119,9 +144,9 @@ def sync_notion() -> dict:
         supabase.table("activity_events").insert([e.model_dump() for e in events]).execute()
         logger.info("Notion sync stored %d events", len(events))
 
-    _last_sync_at = sync_started_at
-    _last_sync = {
+    run_record = {
         "ran_at": sync_started_at.isoformat(),
         "events_stored": len(events),
     }
-    return _last_sync
+    record_run(JOB_NAME, sync_started_at, {"events_stored": len(events)})
+    return run_record

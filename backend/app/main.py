@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -10,9 +11,10 @@ from app.routes.webhooks import github as github_webhook
 from app.routes.webhooks import figma as figma_webhook
 from app.routes.webhooks import linear as linear_webhook
 from app.services.notion import sync_notion
-from app.services.scheduler import run_daily_digests
+from app.services.scheduler import MISFIRE_GRACE_SECONDS, catch_up_if_missed, run_daily_digests
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -24,6 +26,7 @@ async def lifespan(app: FastAPI):
         hour=settings.digest_cron_hour,
         minute=settings.digest_cron_minute,
         id="daily_digest",
+        misfire_grace_time=MISFIRE_GRACE_SECONDS,
     )
     _scheduler.add_job(
         sync_notion,
@@ -31,8 +34,16 @@ async def lifespan(app: FastAPI):
         hour=settings.digest_cron_hour,
         minute=max(0, settings.digest_cron_minute - 5),
         id="notion_sync",
+        misfire_grace_time=MISFIRE_GRACE_SECONDS,
     )
     _scheduler.start()
+    try:
+        # Covers a full process restart spanning the scheduled time, which
+        # misfire_grace_time above does not — a brand new scheduler has no
+        # memory of a cron tick it never got the chance to register.
+        catch_up_if_missed()
+    except Exception:
+        logger.exception("Startup catch-up check failed")
     yield
     _scheduler.shutdown(wait=False)
 
