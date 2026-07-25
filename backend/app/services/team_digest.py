@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 import anthropic
@@ -5,7 +6,9 @@ from fastapi import HTTPException, status
 
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
-from app.services.digest import MODEL, generate_digest
+from app.services.digest import MODEL, _call_claude, generate_digest
+
+logger = logging.getLogger(__name__)
 
 _TEAM_SYSTEM_PROMPT = (
     "You are a progress summarization assistant for a software team. "
@@ -40,8 +43,12 @@ def generate_team_digest() -> dict:
     for actor in actors:
         try:
             actor_digests.append(generate_digest(actor))
-        except HTTPException:
-            pass  # race: actor had events at discovery but none in digest window
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                continue  # benign race: actor had events at discovery but none in digest window
+            # A real failure (e.g. AI service down for this actor) — the team digest still
+            # proceeds without them, but this must not vanish silently.
+            logger.error("Skipping %s in team digest — %s: %s", actor, exc.status_code, exc.detail)
 
     if not actor_digests:
         raise HTTPException(
@@ -54,7 +61,8 @@ def generate_team_digest() -> dict:
     )
 
     client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
-    response = client.messages.create(
+    response = _call_claude(
+        client,
         model=MODEL,
         max_tokens=300,
         system=_TEAM_SYSTEM_PROMPT.format(date=date_str),

@@ -1,7 +1,19 @@
+import logging
+
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
+
+# slack_sdk's WebClient re-raises raw connection/timeout failures (DNS,
+# refused connection, TLS, socket timeout) as-is rather than wrapping them
+# in a SlackApiError — all of urllib.error.URLError, socket.timeout /
+# TimeoutError, and ConnectionError subclass OSError, so catching that
+# alongside SlackApiError covers "Slack said no" and "couldn't reach Slack
+# at all" without also swallowing unrelated bugs (bare Exception would).
+_CONNECTION_ERRORS = OSError
 
 
 def _client() -> WebClient:
@@ -43,7 +55,11 @@ def post_digest(digest: dict, channel: str | None = None) -> str:
         response = _client().chat_postMessage(channel=target, blocks=blocks, text=digest["summary"])
         return response["ts"]
     except SlackApiError as exc:
+        logger.error("Slack API error posting digest for %s: %s", digest.get("actor"), exc.response["error"])
         raise RuntimeError(exc.response["error"]) from exc
+    except _CONNECTION_ERRORS as exc:
+        logger.error("Slack connection error posting digest for %s: %s", digest.get("actor"), exc)
+        raise RuntimeError(f"could not reach Slack: {exc}") from exc
 
 
 def post_team_digest(team_digest: dict, channel: str | None = None) -> str:
@@ -98,4 +114,8 @@ def post_team_digest(team_digest: dict, channel: str | None = None) -> str:
         )
         return response["ts"]
     except SlackApiError as exc:
+        logger.error("Slack API error posting team digest: %s", exc.response["error"])
         raise RuntimeError(exc.response["error"]) from exc
+    except _CONNECTION_ERRORS as exc:
+        logger.error("Slack connection error posting team digest: %s", exc)
+        raise RuntimeError(f"could not reach Slack: {exc}") from exc
