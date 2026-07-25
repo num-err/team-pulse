@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
+from app.services.health import get_actor_health
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,11 @@ _SYSTEM_PROMPT = (
     "You are a progress summarization assistant for a software team. "
     "Given the following raw activity data for {actor} on {date}, write a 2-4 sentence "
     "plain-English summary of what they accomplished. Write in third person. Be specific. "
-    "Keep it under 100 words. No bullet points."
+    "Keep it under 100 words. No bullet points.\n\n"
+    "Context: {actor}'s current status is {health_state} — {health_evidence}. "
+    "Let the tone reflect this naturally (note momentum if things are moving, or gently "
+    "flag if they seem stuck spinning on the same thing without progress) — but don't "
+    "state the status label verbatim or editorialize heavily."
 )
 
 MODEL = "claude-haiku-4-5"
@@ -85,12 +90,19 @@ def generate_digest(actor: str) -> dict:
         for e in events
     )
 
+    health = get_actor_health(actor)
+
     client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
     response = _call_claude(
         client,
         model=MODEL,
         max_tokens=256,
-        system=_SYSTEM_PROMPT.format(actor=actor, date=date_str),
+        system=_SYSTEM_PROMPT.format(
+            actor=actor,
+            date=date_str,
+            health_state=health["state"],
+            health_evidence=health["evidence"],
+        ),
         messages=[{"role": "user", "content": events_text}],
     )
 
@@ -99,4 +111,6 @@ def generate_digest(actor: str) -> dict:
         "actor": actor,
         "date": date_str,
         "event_count": len(events),
+        "sources": sorted({e["source"] for e in events}),
+        "health": health,
     }

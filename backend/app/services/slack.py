@@ -95,6 +95,23 @@ def post_team_digest(team_digest: dict, channel: str | None = None) -> str:
             },
         })
 
+    attention = team_digest.get("attention") or []
+    if attention:
+        blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "*⚠ Attention*"},
+        })
+        for item in attention:
+            label = "Thrashing" if item["state"] == "THRASHING" else "Silent & stuck"
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{item['actor']}* — {label}\n{item['evidence']}",
+                },
+            })
+
     blocks.append({
         "type": "context",
         "elements": [

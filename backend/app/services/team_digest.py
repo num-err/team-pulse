@@ -69,6 +69,12 @@ def generate_team_digest() -> dict:
         messages=[{"role": "user", "content": summaries_text}],
     )
 
+    attention = [
+        {"actor": d["actor"], "state": d["health"]["state"], "evidence": d["health"]["evidence"]}
+        for d in actor_digests
+        if d["health"]["state"] in {"THRASHING", "SILENT_STUCK"}
+    ]
+
     return {
         "date": date_str,
         "actor_count": len(actor_digests),
@@ -79,7 +85,10 @@ def generate_team_digest() -> dict:
                 "actor": d["actor"],
                 "summary": d["summary"],
                 "event_count": d["event_count"],
+                "sources": d["sources"],
+                "health": d["health"],
             }
             for d in actor_digests
         ],
+        "attention": attention,
     }
