@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
+from app.services.identity import resolve_actor
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -111,6 +112,8 @@ async def github_webhook(
         events.extend(_normalize_push(payload))
 
     if events:
+        for e in events:
+            e.actor = resolve_actor(e.source, e.actor)
         supabase = get_supabase()
         supabase.table("activity_events").upsert(
             [e.model_dump() for e in events],

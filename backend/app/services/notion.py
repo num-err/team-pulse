@@ -6,6 +6,7 @@ import httpx
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
+from app.services.identity import resolve_actor
 from app.services.job_runs import get_last_run as _get_last_run_record
 from app.services.job_runs import record_run
 
@@ -140,6 +141,8 @@ def sync_notion() -> dict:
             cursor = data.get("next_cursor")
 
     if events:
+        for e in events:
+            e.actor = resolve_actor(e.source, e.actor)
         supabase = get_supabase()
         supabase.table("activity_events").insert([e.model_dump() for e in events]).execute()
         logger.info("Notion sync stored %d events", len(events))

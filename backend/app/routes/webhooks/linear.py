@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
+from app.services.identity import resolve_actor
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -111,6 +112,7 @@ async def linear_webhook(
         event = _normalize_comment(action, data)
 
     if event:
+        event.actor = resolve_actor(event.source, event.actor)
         supabase = get_supabase()
         supabase.table("activity_events").upsert(
             event.model_dump(),
