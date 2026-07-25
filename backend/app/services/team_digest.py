@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 from app.config import get_settings
 from app.integrations.supabase_client import get_supabase
+from app.services.blockers import find_blockers
 from app.services.digest import MODEL, _call_claude, generate_digest
 
 logger = logging.getLogger(__name__)
@@ -90,5 +91,6 @@ def generate_team_digest() -> dict:
             }
             for d in actor_digests
         ],
+        "blockers": find_blockers(),
         "attention": attention,
     }
