@@ -8,6 +8,10 @@ import {
   Send,
   CheckCircle2,
   AlertCircle,
+  Inbox,
+  AlertTriangle,
+  Repeat,
+  AlertOctagon,
   Users,
   Activity,
   Plus,
@@ -16,11 +20,29 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ActorAvatar } from "@/components/actor-avatar";
+import { SourceIcons } from "@/components/source-icons";
+import { HealthBadge, type Health, type HealthState } from "@/components/health-badge";
 
 interface ActorDigest {
   actor: string;
   summary: string;
   event_count: number;
+  sources: string[];
+  health?: Health;
+}
+
+interface Blocker {
+  title: string;
+  repo: string;
+  actor: string;
+  hours_since_activity: number;
+  url?: string;
+}
+
+interface AttentionItem {
+  actor: string;
+  state: HealthState;
+  evidence: string;
 }
 
 interface TeamDigest {
@@ -29,6 +51,8 @@ interface TeamDigest {
   event_count: number;
   team_summary: string;
   actors: ActorDigest[];
+  blockers: Blocker[];
+  attention: AttentionItem[];
 }
 
 interface SoloDigest extends ActorDigest {
@@ -72,6 +96,7 @@ export default function DashboardPage() {
   const [apiUp, setApiUp] = useState<boolean | null>(null);
   const [team, setTeam] = useState<TeamState>({ status: "idle" });
   const [teamSlack, setTeamSlack] = useState<SlackState>({ status: "idle" });
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const [manualInput, setManualInput] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
@@ -89,6 +114,7 @@ export default function DashboardPage() {
     setTeam({ status: "loading" });
     setTeamSlack({ status: "idle" });
     const result = await apiPost<TeamDigest>("/digest/team");
+    if (result.ok) setLastUpdated(new Date());
     setTeam(result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error });
   }
 
@@ -141,15 +167,23 @@ export default function DashboardPage() {
               Today&apos;s async standup, synthesized from what your team already shipped.
             </p>
           </div>
-          <div className="glass flex items-center gap-2 rounded-full px-3 py-1.5 text-xs">
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                apiUp === null ? "bg-muted-foreground" : apiUp ? "animate-pulse-dot bg-success" : "bg-destructive"
-              }`}
-            />
-            <span className="text-muted-foreground">
-              {apiUp === null ? "Checking API…" : apiUp ? "API connected" : "API unreachable"}
-            </span>
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="glass flex items-center gap-2 rounded-full px-3 py-1.5 text-xs">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  apiUp === null ? "bg-muted-foreground" : apiUp ? "animate-pulse-dot bg-success" : "bg-destructive"
+                }`}
+              />
+              <span className="text-muted-foreground">
+                {apiUp === null ? "Checking API…" : apiUp ? "API connected" : "API unreachable"}
+              </span>
+            </div>
+            {lastUpdated && (
+              <p className="text-[11px] text-muted-foreground">
+                Live — updated{" "}
+                {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </p>
+            )}
           </div>
         </header>
 
@@ -198,12 +232,27 @@ export default function DashboardPage() {
               exit={{ opacity: 0 }}
               className="glass mb-8 flex flex-col items-center gap-3 rounded-2xl p-10 text-center"
             >
-              <AlertCircle className="h-8 w-8 text-muted-foreground" />
-              <p className="font-medium">{team.error}</p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Team Pulse only looks at the last 24 hours. Push a commit, open a PR, or
-                trigger a webhook, then try again.
-              </p>
+              {(() => {
+                const quiet = team.error.toLowerCase().includes("no activity");
+                const Icon = quiet ? Inbox : AlertCircle;
+                return (
+                  <>
+                    <div
+                      className={`flex h-12 w-12 items-center justify-center rounded-full ${
+                        quiet ? "bg-white/5" : "bg-destructive/10"
+                      }`}
+                    >
+                      <Icon className={`h-6 w-6 ${quiet ? "text-muted-foreground" : "text-destructive"}`} />
+                    </div>
+                    <p className="font-medium">{quiet ? "All quiet in the last 24 hours" : team.error}</p>
+                    <p className="max-w-sm text-sm text-muted-foreground">
+                      {quiet
+                        ? "Team Pulse only looks at the last 24 hours. Push a commit, open a PR, or trigger a webhook, then try again."
+                        : "Check that the API is reachable and your API key is set, then try again."}
+                    </p>
+                  </>
+                );
+              })()}
             </motion.div>
           )}
 
@@ -214,6 +263,95 @@ export default function DashboardPage() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
             >
+              {/* Health attention alerts — the money shot, surfaced above everything */}
+              {team.data.attention.length > 0 && (
+                <section className="mb-8 space-y-3">
+                  {team.data.attention.map((item) => {
+                    const isStuck = item.state === "SILENT_STUCK";
+                    const Icon = isStuck ? AlertOctagon : Repeat;
+                    const question = isStuck
+                      ? "Is this blocked?"
+                      : "Hard problem — worth a pairing session?";
+                    return (
+                      <motion.div
+                        key={`${item.actor}-${item.state}`}
+                        initial={{ opacity: 0, scale: 0.98 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={
+                          isStuck
+                            ? "relative overflow-hidden rounded-2xl border border-destructive/40 bg-destructive/10 p-5 shadow-[0_0_40px_-10px_hsl(var(--destructive)/0.55)]"
+                            : "relative overflow-hidden rounded-2xl border border-amber-400/40 bg-amber-500/10 p-5 shadow-[0_0_40px_-10px_rgba(251,191,36,0.55)]"
+                        }
+                      >
+                        <div className="flex items-start gap-4">
+                          <div
+                            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                              isStuck ? "bg-destructive/20" : "bg-amber-400/20"
+                            }`}
+                          >
+                            <Icon
+                              className={`h-6 w-6 animate-pulse ${
+                                isStuck ? "text-destructive" : "text-amber-300"
+                              }`}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <Badge variant={isStuck ? "destructive" : "warning"} className="mb-1.5">
+                              {isStuck ? "Silent & stuck" : "Thrashing"}
+                            </Badge>
+                            <p
+                              className={`text-lg font-bold leading-tight ${
+                                isStuck ? "text-destructive" : "text-amber-100"
+                              }`}
+                            >
+                              {item.actor} — {question}
+                            </p>
+                            <p
+                              className={`mt-1 text-sm ${
+                                isStuck ? "text-destructive/70" : "text-amber-200/70"
+                              }`}
+                            >
+                              {item.evidence}
+                            </p>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </section>
+              )}
+
+              {/* Blocker alerts — surfaced first, impossible to miss */}
+              {team.data.blockers.length > 0 && (
+                <section className="mb-8 space-y-3">
+                  {team.data.blockers.map((b) => (
+                    <motion.div
+                      key={`${b.repo}-${b.title}`}
+                      initial={{ opacity: 0, scale: 0.98 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="relative overflow-hidden rounded-2xl border border-amber-400/40 bg-amber-500/10 p-5 shadow-[0_0_40px_-10px_rgba(251,191,36,0.55)]"
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-400/20">
+                          <AlertTriangle className="h-6 w-6 animate-pulse text-amber-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <Badge variant="warning" className="mb-1.5">
+                            Possibly blocked
+                          </Badge>
+                          <p className="text-lg font-bold leading-tight text-amber-100">
+                            {b.title} — no activity in {b.hours_since_activity} hours
+                          </p>
+                          <p className="mt-1 text-sm text-amber-200/70">
+                            {b.actor} · {b.repo}
+                          </p>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </section>
+              )}
+
               {/* Team summary card */}
               <section className="glass glow-border mb-8 rounded-2xl p-7">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -263,6 +401,8 @@ export default function DashboardPage() {
                     actor={a.actor}
                     summary={a.summary}
                     eventCount={a.event_count}
+                    sources={a.sources}
+                    health={a.health}
                     delay={i * 0.06}
                     slackState={manualSlack[a.actor]}
                     onSendSlack={() => sendManualToSlack(a.actor)}
@@ -315,6 +455,8 @@ export default function DashboardPage() {
                           actor={actor}
                           summary={d?.status === "done" ? d.data.summary : undefined}
                           eventCount={d?.status === "done" ? d.data.event_count : undefined}
+                          sources={d?.status === "done" ? d.data.sources : undefined}
+                          health={d?.status === "done" ? d.data.health : undefined}
                           loading={d?.status === "loading"}
                           error={d?.status === "error" ? d.error : undefined}
                           slackState={manualSlack[actor]}
@@ -343,6 +485,8 @@ function ActorCard({
   actor,
   summary,
   eventCount,
+  sources,
+  health,
   loading,
   error,
   delay = 0,
@@ -352,6 +496,8 @@ function ActorCard({
   actor: string;
   summary?: string;
   eventCount?: number;
+  sources?: string[];
+  health?: Health;
   loading?: boolean;
   error?: string;
   delay?: number;
@@ -370,11 +516,15 @@ function ActorCard({
         <ActorAvatar actor={actor} />
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium">{actor}</p>
-          {eventCount !== undefined && (
-            <p className="text-xs text-muted-foreground">
-              {eventCount} event{eventCount !== 1 ? "s" : ""}
-            </p>
-          )}
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            {health && <HealthBadge state={health.state} />}
+            {eventCount !== undefined && (
+              <Badge>
+                <Activity className="h-3 w-3" /> {eventCount} event{eventCount !== 1 ? "s" : ""}
+              </Badge>
+            )}
+            <SourceIcons sources={sources} />
+          </div>
         </div>
       </div>
 
