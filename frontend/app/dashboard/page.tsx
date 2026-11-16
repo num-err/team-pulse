@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { ActorAvatar } from "@/components/actor-avatar";
 import { SourceIcons } from "@/components/source-icons";
 import { HealthHero, healthAccentColor, type Health, type HealthState } from "@/components/health-badge";
+import { DEMO_MODE, demoPost } from "@/lib/demo";
 
 interface ActorDigest {
   actor: string;
@@ -80,6 +81,7 @@ function apiHeaders(): HeadersInit {
 }
 
 async function apiPost<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  if (DEMO_MODE) return (await demoPost(path)) as { ok: true; data: T } | { ok: false; error: string };
   try {
     const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: apiHeaders() });
     if (!res.ok) {
@@ -105,6 +107,10 @@ export default function DashboardPage() {
   const [manualSlack, setManualSlack] = useState<Record<string, SlackState>>({});
 
   useEffect(() => {
+    if (DEMO_MODE) {
+      setApiUp(true);
+      return;
+    }
     fetch(`${API_URL}/health`)
       .then((r) => setApiUp(r.ok))
       .catch(() => setApiUp(false));
@@ -175,7 +181,13 @@ export default function DashboardPage() {
                 }`}
               />
               <span className="text-muted-foreground">
-                {apiUp === null ? "Checking API…" : apiUp ? "API connected" : "API unreachable"}
+                {DEMO_MODE
+                  ? "Demo mode · sample team data"
+                  : apiUp === null
+                    ? "Checking API…"
+                    : apiUp
+                      ? "API connected"
+                      : "API unreachable"}
               </span>
             </div>
             {lastUpdated && (
