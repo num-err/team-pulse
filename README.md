@@ -4,6 +4,10 @@
 
 It also flags people who look stuck before they say so: someone committing over and over with failing CI and no merges, or a ticket that's sat "In Progress" for days with no activity.
 
+### 🔗 [Live demo →](https://num-err.github.io/team-pulse/dashboard/)
+
+Click **Generate team digest** to see a sample four-person team, including a THRASHING alert. The demo runs on built-in sample data (no backend), so Slack delivery is simulated.
+
 **Stack:** FastAPI · Python 3.13 · PostgreSQL (Supabase) · Anthropic API (Claude Haiku) · Slack SDK · APScheduler · Next.js 14 · TypeScript · Tailwind · shadcn/ui
 
 ---
