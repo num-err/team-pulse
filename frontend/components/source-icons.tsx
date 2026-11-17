@@ -1,11 +1,12 @@
-import { Github, GitBranch, FileText, Figma, type LucideIcon } from "lucide-react";
+import { Github, GitBranch, FileText, Figma, Slack, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const SOURCE_META: Record<string, { icon: LucideIcon; label: string }> = {
+export const SOURCE_META: Record<string, { icon: LucideIcon; label: string }> = {
   github: { icon: Github, label: "GitHub" },
   linear: { icon: GitBranch, label: "Linear" },
   notion: { icon: FileText, label: "Notion" },
   figma: { icon: Figma, label: "Figma" },
+  slack: { icon: Slack, label: "Slack" },
 };
 
 export function SourceIcons({ sources, className }: { sources?: string[]; className?: string }) {
@@ -17,13 +18,14 @@ export function SourceIcons({ sources, className }: { sources?: string[]; classN
         if (!meta) return null;
         const Icon = meta.icon;
         return (
-          <div
+          <span
             key={source}
             title={meta.label}
-            className="flex h-5 w-5 items-center justify-center rounded-full border border-white/10 bg-white/5 text-muted-foreground"
+            aria-label={meta.label}
+            className="flex h-6 w-6 items-center justify-center rounded-md border bg-card text-muted-foreground"
           >
-            <Icon className="h-3 w-3" />
-          </div>
+            <Icon className="h-3.5 w-3.5" />
+          </span>
         );
       })}
     </div>

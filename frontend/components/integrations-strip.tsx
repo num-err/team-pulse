@@ -1,26 +1,20 @@
-import { Github, Slack, Figma, FileText, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SOURCE_META } from "@/components/source-icons";
 
-const INTEGRATIONS = [
-  { name: "GitHub", icon: Github },
-  { name: "Linear", icon: GitBranch },
-  { name: "Notion", icon: FileText },
-  { name: "Figma", icon: Figma },
-  { name: "Slack", icon: Slack },
-];
+const ORDER = ["github", "linear", "notion", "figma", "slack"];
 
 export function IntegrationsStrip({ className }: { className?: string }) {
   return (
-    <div className={cn("flex flex-wrap items-center justify-center gap-3", className)}>
-      {INTEGRATIONS.map(({ name, icon: Icon }) => (
-        <div
-          key={name}
-          className="glass flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm text-muted-foreground"
-        >
-          <Icon className="h-4 w-4" />
-          <span>{name}</span>
-        </div>
-      ))}
+    <div className={cn("flex flex-wrap items-center gap-x-6 gap-y-3", className)}>
+      {ORDER.map((key) => {
+        const { icon: Icon, label } = SOURCE_META[key];
+        return (
+          <span key={key} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <Icon className="h-4 w-4" />
+            {label}
+          </span>
+        );
+      })}
     </div>
   );
 }

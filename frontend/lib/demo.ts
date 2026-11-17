@@ -5,7 +5,12 @@
 
 export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-const today = () => new Date().toISOString().slice(0, 10);
+// The viewer's local calendar date (toISOString would give UTC, which is
+// "tomorrow" for US evening visitors).
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 const ACTORS = [
   {

@@ -49,24 +49,14 @@ const config: Config = {
         },
         success: "hsl(var(--success))",
       },
+      boxShadow: {
+        xs: "0 1px 2px 0 rgb(16 24 40 / 0.05)",
+        card: "0 1px 2px 0 rgb(16 24 40 / 0.04), 0 1px 3px 0 rgb(16 24 40 / 0.06)",
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
-      },
-      keyframes: {
-        "pulse-dot": {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.4" },
-        },
-        float: {
-          "0%, 100%": { transform: "translateY(0px)" },
-          "50%": { transform: "translateY(-10px)" },
-        },
-      },
-      animation: {
-        "pulse-dot": "pulse-dot 2s ease-in-out infinite",
-        float: "float 6s ease-in-out infinite",
       },
     },
   },

@@ -1,28 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import Link from "next/link";
 import {
-  Sparkles,
-  RefreshCw,
-  Send,
-  CheckCircle2,
-  AlertCircle,
-  Inbox,
-  AlertTriangle,
-  Repeat,
   AlertOctagon,
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Github,
+  LayoutDashboard,
+  Plug,
+  RefreshCw,
+  Search,
+  Send,
+  Sparkles,
   Users,
-  Activity,
-  Plus,
-  ChevronDown,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ActorAvatar } from "@/components/actor-avatar";
-import { SourceIcons } from "@/components/source-icons";
-import { HealthHero, healthAccentColor, type Health, type HealthState } from "@/components/health-badge";
+import { SourceIcons, SOURCE_META } from "@/components/source-icons";
+import { HealthBadge, HEALTH_META, type Health, type HealthState } from "@/components/health-badge";
+import { LogoMark } from "@/components/logo";
 import { DEMO_MODE, demoPost } from "@/lib/demo";
+import { cn } from "@/lib/utils";
+
+/* ------------------------------------------------------------------ types */
 
 interface ActorDigest {
   actor: string;
@@ -73,8 +77,11 @@ type SoloState =
   | { status: "error"; error: string }
   | { status: "done"; data: SoloDigest };
 
+/* -------------------------------------------------------------------- api */
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+const REPO_URL = "https://github.com/num-err/team-pulse";
 
 function apiHeaders(): HeadersInit {
   return API_KEY ? { "X-API-Key": API_KEY } : {};
@@ -94,35 +101,49 @@ async function apiPost<T>(path: string): Promise<{ ok: true; data: T } | { ok: f
   }
 }
 
+const slug = (s: string) => `person-${s.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+
+function formatDate(iso: string) {
+  const d = new Date(`${iso}T12:00:00`);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
+
+/* ------------------------------------------------------------------- page */
+
 export default function DashboardPage() {
   const [apiUp, setApiUp] = useState<boolean | null>(null);
   const [team, setTeam] = useState<TeamState>({ status: "idle" });
   const [teamSlack, setTeamSlack] = useState<SlackState>({ status: "idle" });
+  const [personSlack, setPersonSlack] = useState<Record<string, SlackState>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const [manualInput, setManualInput] = useState("");
-  const [manualOpen, setManualOpen] = useState(false);
-  const [manualActors, setManualActors] = useState<string[]>([]);
-  const [manualDigests, setManualDigests] = useState<Record<string, SoloState>>({});
-  const [manualSlack, setManualSlack] = useState<Record<string, SlackState>>({});
+  const [lookupInput, setLookupInput] = useState("");
+  const [lookupActors, setLookupActors] = useState<string[]>([]);
+  const [lookupDigests, setLookupDigests] = useState<Record<string, SoloState>>({});
+
+  async function generateTeamDigest() {
+    setTeam({ status: "loading" });
+    setTeamSlack({ status: "idle" });
+    setPersonSlack({});
+    const result = await apiPost<TeamDigest>("/digest/team");
+    if (result.ok) setLastUpdated(new Date());
+    setTeam(result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error });
+  }
 
   useEffect(() => {
     if (DEMO_MODE) {
+      // The public demo opens on a populated dashboard instead of an empty one.
       setApiUp(true);
+      generateTeamDigest();
       return;
     }
     fetch(`${API_URL}/health`)
       .then((r) => setApiUp(r.ok))
       .catch(() => setApiUp(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function generateTeamDigest() {
-    setTeam({ status: "loading" });
-    setTeamSlack({ status: "idle" });
-    const result = await apiPost<TeamDigest>("/digest/team");
-    if (result.ok) setLastUpdated(new Date());
-    setTeam(result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error });
-  }
 
   async function sendTeamToSlack() {
     setTeamSlack({ status: "sending" });
@@ -130,450 +151,633 @@ export default function DashboardPage() {
     setTeamSlack(result.ok ? { status: "sent" } : { status: "error", error: result.error });
   }
 
-  async function addManualActor() {
-    const actor = manualInput.trim();
-    if (!actor) return;
-    setManualInput("");
-    if (!manualActors.includes(actor)) setManualActors((prev) => [...prev, actor]);
-    setManualDigests((prev) => ({ ...prev, [actor]: { status: "loading" } }));
-    const result = await apiPost<SoloDigest>(`/digest/generate?actor=${encodeURIComponent(actor)}`);
-    setManualDigests((prev) => ({
-      ...prev,
-      [actor]: result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error },
-    }));
-  }
-
-  async function sendManualToSlack(actor: string) {
-    setManualSlack((prev) => ({ ...prev, [actor]: { status: "sending" } }));
+  async function sendPersonToSlack(actor: string) {
+    setPersonSlack((prev) => ({ ...prev, [actor]: { status: "sending" } }));
     const result = await apiPost(`/slack/deliver?actor=${encodeURIComponent(actor)}`);
-    setManualSlack((prev) => ({
+    setPersonSlack((prev) => ({
       ...prev,
       [actor]: result.ok ? { status: "sent" } : { status: "error", error: result.error },
     }));
   }
 
-  const teamActorNames = team.status === "done" ? new Set(team.data.actors.map((a) => a.actor)) : new Set<string>();
-  const visibleManualActors = manualActors.filter((a) => !teamActorNames.has(a));
+  async function lookupActor() {
+    const actor = lookupInput.trim();
+    if (!actor) return;
+    setLookupInput("");
+    if (!lookupActors.includes(actor)) setLookupActors((prev) => [...prev, actor]);
+    setLookupDigests((prev) => ({ ...prev, [actor]: { status: "loading" } }));
+    const result = await apiPost<SoloDigest>(`/digest/generate?actor=${encodeURIComponent(actor)}`);
+    setLookupDigests((prev) => ({
+      ...prev,
+      [actor]: result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error },
+    }));
+  }
+
+  const data = team.status === "done" ? team.data : null;
+  const attentionCount = data ? data.attention.length + data.blockers.length : 0;
+  const sortedActors = data
+    ? [...data.actors].sort(
+        (a, b) => HEALTH_META[a.health?.state ?? "IDLE"].rank - HEALTH_META[b.health?.state ?? "IDLE"].rank
+      )
+    : [];
 
   return (
-    <main className="relative min-h-screen">
-      <div className="bg-grid pointer-events-none fixed inset-0 [mask-image:radial-gradient(ellipse_70%_60%_at_50%_0%,black,transparent)]" />
-      <div
-        aria-hidden
-        className="pointer-events-none fixed -top-40 left-1/2 h-[32rem] w-[32rem] -translate-x-1/2 rounded-full bg-violet-600/15 blur-[120px]"
-      />
+    <div className="min-h-screen bg-background">
+      <Sidebar attentionCount={attentionCount} />
 
-      <div className="relative z-10 mx-auto max-w-5xl px-6 py-10">
-        <header className="mb-10 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              Team <span className="gradient-text">Pulse</span>
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Today&apos;s async standup, synthesized from what your team already shipped.
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-1.5">
-            <div className="glass flex items-center gap-2 rounded-full px-3 py-1.5 text-xs">
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  apiUp === null ? "bg-muted-foreground" : apiUp ? "animate-pulse-dot bg-success" : "bg-destructive"
-                }`}
-              />
-              <span className="text-muted-foreground">
-                {DEMO_MODE
-                  ? "Demo mode · sample team data"
-                  : apiUp === null
-                    ? "Checking API…"
-                    : apiUp
-                      ? "API connected"
-                      : "API unreachable"}
-              </span>
+      <div className="lg:pl-60">
+        {/* Top bar */}
+        <header className="sticky top-0 z-20 border-b bg-card/90 backdrop-blur supports-[backdrop-filter]:bg-card/75">
+          <div className="flex h-14 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <Link href="/" className="lg:hidden" aria-label="Team Pulse home">
+                <LogoMark className="h-7 w-7" />
+              </Link>
+              <nav className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <span className="hidden truncate sm:inline">Acme Inc.</span>
+                <span className="hidden sm:inline">/</span>
+                <span className="truncate font-medium text-foreground">Daily digest</span>
+              </nav>
             </div>
-            {lastUpdated && (
-              <p className="text-[11px] text-muted-foreground">
-                Live — updated{" "}
-                {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </p>
-            )}
+            <ConnectionStatus apiUp={apiUp} />
           </div>
         </header>
 
-        {/* Hero action */}
-        <section className="glass glow-border relative mb-8 overflow-hidden rounded-2xl p-8 text-center">
-          <div className="mx-auto flex max-w-md flex-col items-center gap-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-sky-400">
-              <Sparkles className="h-6 w-6 text-white" />
+        <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+          {/* Page header */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">Daily digest</h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {data ? formatDate(data.date) : "Today"} · Activity from the last 24 hours across GitHub, Linear,
+                Notion and Figma.
+              </p>
             </div>
-            <h2 className="text-xl font-semibold">Generate today&apos;s team digest</h2>
-            <p className="text-sm text-muted-foreground">
-              One click pulls the last 24h of GitHub, Linear, and Notion activity across
-              the whole team and asks Claude to write the rollup.
-            </p>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <Button
-                size="lg"
-                onClick={generateTeamDigest}
-                disabled={team.status === "loading"}
-                className="bg-gradient-to-r from-violet-500 to-sky-400 text-white hover:opacity-90"
+                variant="outline"
+                onClick={sendTeamToSlack}
+                disabled={!data || teamSlack.status === "sending" || teamSlack.status === "sent"}
               >
-                {team.status === "loading" ? (
+                {teamSlack.status === "sent" ? (
                   <>
-                    <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" /> Synthesizing…
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" /> Sent to Slack
                   </>
-                ) : team.status === "done" ? (
+                ) : teamSlack.status === "sending" ? (
                   <>
-                    <RefreshCw className="mr-1.5 h-4 w-4" /> Regenerate
+                    <RefreshCw className="h-4 w-4 animate-spin" /> Sending…
                   </>
                 ) : (
                   <>
-                    <Sparkles className="mr-1.5 h-4 w-4" /> Generate team digest
+                    <Send className="h-4 w-4" /> Send to Slack
                   </>
                 )}
               </Button>
+              <Button onClick={generateTeamDigest} disabled={team.status === "loading"}>
+                <RefreshCw className={cn("h-4 w-4", team.status === "loading" && "animate-spin")} />
+                {team.status === "loading" ? "Generating…" : data ? "Regenerate" : "Generate digest"}
+              </Button>
             </div>
           </div>
-        </section>
-
-        <AnimatePresence mode="wait">
-          {team.status === "error" && (
-            <motion.div
-              key="error"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              className="glass mb-8 flex flex-col items-center gap-3 rounded-2xl p-10 text-center"
-            >
-              {(() => {
-                const quiet = team.error.toLowerCase().includes("no activity");
-                const Icon = quiet ? Inbox : AlertCircle;
-                return (
-                  <>
-                    <div
-                      className={`flex h-12 w-12 items-center justify-center rounded-full ${
-                        quiet ? "bg-white/5" : "bg-destructive/10"
-                      }`}
-                    >
-                      <Icon className={`h-6 w-6 ${quiet ? "text-muted-foreground" : "text-destructive"}`} />
-                    </div>
-                    <p className="font-medium">{quiet ? "All quiet in the last 24 hours" : team.error}</p>
-                    <p className="max-w-sm text-sm text-muted-foreground">
-                      {quiet
-                        ? "Team Pulse only looks at the last 24 hours. Push a commit, open a PR, or trigger a webhook, then try again."
-                        : "Check that the API is reachable and your API key is set, then try again."}
-                    </p>
-                  </>
-                );
-              })()}
-            </motion.div>
+          {(lastUpdated || teamSlack.status === "error") && (
+            <p className={cn("mt-2 text-xs", teamSlack.status === "error" ? "text-red-600" : "text-muted-foreground")}>
+              {teamSlack.status === "error"
+                ? teamSlack.error
+                : `Generated at ${lastUpdated!.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${
+                    DEMO_MODE ? " · Sample data" : ""
+                  }`}
+            </p>
           )}
 
-          {team.status === "done" && (
-            <motion.div
-              key="done"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
-            >
-              {/* Health attention alerts — the money shot, surfaced above everything */}
-              {team.data.attention.length > 0 && (
-                <section className="mb-8 space-y-3">
-                  {team.data.attention.map((item) => {
-                    const isStuck = item.state === "SILENT_STUCK";
-                    const Icon = isStuck ? AlertOctagon : Repeat;
-                    const question = isStuck
-                      ? "Is this blocked?"
-                      : "Hard problem — worth a pairing session?";
-                    return (
-                      <motion.div
-                        key={`${item.actor}-${item.state}`}
-                        initial={{ opacity: 0, scale: 0.98 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className={
-                          isStuck
-                            ? "relative overflow-hidden rounded-2xl border border-destructive/40 bg-destructive/10 p-5 shadow-[0_0_40px_-10px_hsl(var(--destructive)/0.55)]"
-                            : "relative overflow-hidden rounded-2xl border border-amber-400/40 bg-amber-500/10 p-5 shadow-[0_0_40px_-10px_rgba(251,191,36,0.55)]"
-                        }
-                      >
-                        <div className="flex items-start gap-4">
-                          <div
-                            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
-                              isStuck ? "bg-destructive/20" : "bg-amber-400/20"
-                            }`}
-                          >
-                            <Icon
-                              className={`h-6 w-6 animate-pulse ${
-                                isStuck ? "text-destructive" : "text-amber-300"
-                              }`}
-                            />
-                          </div>
-                          <div className="min-w-0">
-                            <Badge variant={isStuck ? "destructive" : "warning"} className="mb-1.5">
-                              {isStuck ? "Silent & stuck" : "Thrashing"}
-                            </Badge>
-                            <p
-                              className={`text-lg font-bold leading-tight ${
-                                isStuck ? "text-destructive" : "text-amber-100"
-                              }`}
-                            >
-                              {item.actor} — {question}
-                            </p>
-                            <p
-                              className={`mt-1 text-sm ${
-                                isStuck ? "text-destructive/70" : "text-amber-200/70"
-                              }`}
-                            >
-                              {item.evidence}
-                            </p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    );
-                  })}
-                </section>
-              )}
+          <div className="mt-8 space-y-8">
+            {team.status === "idle" && <EmptyState onGenerate={generateTeamDigest} />}
+            {team.status === "loading" && <LoadingState />}
+            {team.status === "error" && <ErrorState error={team.error} onRetry={generateTeamDigest} />}
 
-              {/* Blocker alerts — surfaced first, impossible to miss */}
-              {team.data.blockers.length > 0 && (
-                <section className="mb-8 space-y-3">
-                  {team.data.blockers.map((b) => (
-                    <motion.div
-                      key={`${b.repo}-${b.title}`}
-                      initial={{ opacity: 0, scale: 0.98 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className="relative overflow-hidden rounded-2xl border border-amber-400/40 bg-amber-500/10 p-5 shadow-[0_0_40px_-10px_rgba(251,191,36,0.55)]"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-400/20">
-                          <AlertTriangle className="h-6 w-6 animate-pulse text-amber-300" />
-                        </div>
-                        <div className="min-w-0">
-                          <Badge variant="warning" className="mb-1.5">
-                            Possibly blocked
-                          </Badge>
-                          <p className="text-lg font-bold leading-tight text-amber-100">
-                            {b.title} — no activity in {b.hours_since_activity} hours
-                          </p>
-                          <p className="mt-1 text-sm text-amber-200/70">
-                            {b.actor} · {b.repo}
-                          </p>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))}
+            {data && (
+              <>
+                {/* KPIs */}
+                <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <StatTile label="Contributors" value={data.actor_count} hint="Active in the last 24h" />
+                  <StatTile label="Events" value={data.event_count} hint="Commits, PRs, tickets, docs" />
+                  <StatTile
+                    label="Needs attention"
+                    value={data.attention.length}
+                    hint={data.attention.length ? "Health signals flagged" : "No one flagged"}
+                    tone={data.attention.length ? "warning" : undefined}
+                  />
+                  <StatTile
+                    label="Stale tickets"
+                    value={data.blockers.length}
+                    hint="In Progress, idle 48h+"
+                    tone={data.blockers.length ? "warning" : undefined}
+                  />
                 </section>
-              )}
 
-              {/* Team summary card */}
-              <section className="glass glow-border mb-8 rounded-2xl p-7">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-semibold">Team digest — {team.data.date}</h3>
-                    <div className="mt-2 flex gap-2">
-                      <Badge variant="accent">
-                        <Users className="h-3 w-3" /> {team.data.actor_count} teammate
-                        {team.data.actor_count !== 1 ? "s" : ""}
-                      </Badge>
-                      <Badge>
-                        <Activity className="h-3 w-3" /> {team.data.event_count} event
-                        {team.data.event_count !== 1 ? "s" : ""}
-                      </Badge>
+                {/* Attention */}
+                <section id="attention" className="scroll-mt-20">
+                  <SectionHeading
+                    title="Needs attention"
+                    description="People and tickets the health engine thinks are worth a check-in."
+                    count={attentionCount}
+                  />
+                  {attentionCount === 0 ? (
+                    <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3.5 text-sm text-muted-foreground shadow-xs">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      Nothing flagged — everyone with open work is making progress.
                     </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {data.attention.map((item) => (
+                        <AttentionRow key={`${item.actor}-${item.state}`} item={item} />
+                      ))}
+                      {data.blockers.map((b) => (
+                        <BlockerRow key={`${b.repo}-${b.title}`} blocker={b} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                {/* Summary */}
+                <section id="summary" className="scroll-mt-20">
+                  <SectionHeading title="Team summary" />
+                  <div className="rounded-lg border bg-card p-5 shadow-xs sm:p-6">
+                    <div className="mb-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                      <Sparkles className="h-3.5 w-3.5 text-primary" />
+                      AI-generated summary · Claude Haiku
+                    </div>
+                    <p className="text-[15px] leading-7 text-foreground/90">{data.team_summary}</p>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={teamSlack.status === "sending" || teamSlack.status === "sent"}
-                    onClick={sendTeamToSlack}
-                  >
-                    {teamSlack.status === "sent" ? (
-                      <>
-                        <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-success" /> Sent to Slack
-                      </>
-                    ) : teamSlack.status === "sending" ? (
-                      "Sending…"
-                    ) : (
-                      <>
-                        <Send className="mr-1.5 h-3.5 w-3.5" /> Send to Slack
-                      </>
-                    )}
-                  </Button>
-                </div>
-                <p className="leading-relaxed text-foreground/90">{team.data.team_summary}</p>
-                {teamSlack.status === "error" && (
-                  <p className="mt-2 text-xs text-destructive">{teamSlack.error}</p>
-                )}
-              </section>
+                </section>
 
-              {/* Per-actor grid */}
-              <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {team.data.actors.map((a, i) => (
-                  <ActorCard
-                    key={a.actor}
-                    actor={a.actor}
-                    summary={a.summary}
-                    eventCount={a.event_count}
-                    sources={a.sources}
-                    health={a.health}
-                    delay={i * 0.06}
-                    slackState={manualSlack[a.actor]}
-                    onSendSlack={() => sendManualToSlack(a.actor)}
+                {/* Team */}
+                <section id="team" className="scroll-mt-20">
+                  <SectionHeading
+                    title="Team"
+                    description="Per-person standups, written from each person's own activity."
+                    count={data.actors.length}
                   />
-                ))}
-              </section>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                  <ul className="divide-y overflow-hidden rounded-lg border bg-card shadow-xs">
+                    {sortedActors.map((a) => (
+                      <PersonRow
+                        key={a.actor}
+                        person={a}
+                        slackState={personSlack[a.actor]}
+                        onSendSlack={() => sendPersonToSlack(a.actor)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              </>
+            )}
 
-        {/* Manual add */}
-        <section className="mt-10">
-          <button
-            onClick={() => setManualOpen((v) => !v)}
-            className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ChevronDown className={`h-4 w-4 transition-transform ${manualOpen ? "rotate-180" : ""}`} />
-            Add a teammate manually
-          </button>
-
-          <AnimatePresence>
-            {manualOpen && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="mb-6 mt-4 flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="GitHub username or actor name"
-                    value={manualInput}
-                    onChange={(e) => setManualInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && addManualActor()}
-                    className="flex h-9 w-full max-w-xs rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  />
-                  <Button onClick={addManualActor} disabled={!manualInput.trim()}>
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add
+            {/* Lookup */}
+            <section id="lookup" className="scroll-mt-20">
+              <SectionHeading
+                title="Look up a teammate"
+                description="Generate a standup for one person, even if they're not in today's digest."
+              />
+              <div className="rounded-lg border bg-card p-4 shadow-xs">
+                <form
+                  className="flex flex-col gap-2 sm:flex-row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    lookupActor();
+                  }}
+                >
+                  <div className="relative flex-1 sm:max-w-sm">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder={DEMO_MODE ? "Try “Marcus Webb”" : "GitHub username or display name"}
+                      value={lookupInput}
+                      onChange={(e) => setLookupInput(e.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-card pl-9 pr-3 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  </div>
+                  <Button type="submit" variant="outline" disabled={!lookupInput.trim()}>
+                    Look up
                   </Button>
-                </div>
-
-                {visibleManualActors.length > 0 && (
-                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {visibleManualActors.map((actor) => {
-                      const d = manualDigests[actor];
+                </form>
+                {lookupActors.length > 0 && (
+                  <ul className="mt-4 divide-y overflow-hidden rounded-md border">
+                    {lookupActors.map((actor) => {
+                      const d = lookupDigests[actor];
+                      if (d?.status === "done") {
+                        return (
+                          <PersonRow
+                            key={actor}
+                            person={d.data}
+                            slackState={personSlack[actor]}
+                            onSendSlack={() => sendPersonToSlack(actor)}
+                          />
+                        );
+                      }
                       return (
-                        <ActorCard
-                          key={actor}
-                          actor={actor}
-                          summary={d?.status === "done" ? d.data.summary : undefined}
-                          eventCount={d?.status === "done" ? d.data.event_count : undefined}
-                          sources={d?.status === "done" ? d.data.sources : undefined}
-                          health={d?.status === "done" ? d.data.health : undefined}
-                          loading={d?.status === "loading"}
-                          error={d?.status === "error" ? d.error : undefined}
-                          slackState={manualSlack[actor]}
-                          onSendSlack={() => sendManualToSlack(actor)}
-                        />
+                        <li key={actor} className="flex items-center gap-3 px-5 py-4 text-sm">
+                          <ActorAvatar actor={actor} />
+                          <span className="font-medium">{actor}</span>
+                          <span className={cn("text-muted-foreground", d?.status === "error" && "text-red-600")}>
+                            {d?.status === "error" ? d.error : "Generating…"}
+                          </span>
+                        </li>
                       );
                     })}
-                  </div>
+                  </ul>
                 )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </section>
+              </div>
+            </section>
 
-        {team.status === "idle" && (
-          <p className="mt-10 text-center text-xs text-muted-foreground">
-            Nothing generated yet — click &quot;Generate team digest&quot; above to pull today&apos;s activity.
-          </p>
-        )}
+            {/* Integrations */}
+            <section id="integrations" className="scroll-mt-20 pb-8">
+              <SectionHeading title="Integrations" description="Where Team Pulse reads activity and delivers digests." />
+              <IntegrationsTable />
+            </section>
+          </div>
+        </main>
       </div>
-    </main>
+    </div>
   );
 }
 
-function ActorCard({
-  actor,
-  summary,
-  eventCount,
-  sources,
-  health,
-  loading,
-  error,
-  delay = 0,
+/* ------------------------------------------------------------- layout bits */
+
+const NAV: { href: string; label: string; icon: LucideIcon; countKey?: boolean }[] = [
+  { href: "#summary", label: "Daily digest", icon: LayoutDashboard },
+  { href: "#attention", label: "Needs attention", icon: AlertTriangle, countKey: true },
+  { href: "#team", label: "Team", icon: Users },
+  { href: "#lookup", label: "Look up", icon: Search },
+  { href: "#integrations", label: "Integrations", icon: Plug },
+];
+
+function Sidebar({ attentionCount }: { attentionCount: number }) {
+  return (
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r bg-card lg:flex">
+      <div className="flex h-14 items-center border-b px-5">
+        <Link href="/" className="inline-flex items-center gap-2 text-[15px] font-semibold tracking-tight">
+          <LogoMark className="h-6 w-6" />
+          Team Pulse
+        </Link>
+      </div>
+
+      <nav className="flex-1 space-y-0.5 px-3 py-4">
+        <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Workspace</p>
+        {NAV.map(({ href, label, icon: Icon, countKey }, i) => (
+          <a
+            key={href}
+            href={href}
+            className={cn(
+              "flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors",
+              i === 0
+                ? "bg-secondary font-medium text-foreground"
+                : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+            )}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="flex-1">{label}</span>
+            {countKey && attentionCount > 0 && (
+              <span className="rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-800 tabular">
+                {attentionCount}
+              </span>
+            )}
+          </a>
+        ))}
+      </nav>
+
+      <div className="space-y-3 border-t p-4">
+        <a
+          href={REPO_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <Github className="h-4 w-4" /> Source on GitHub
+        </a>
+        <div className="flex items-center gap-2.5 rounded-md border bg-background p-2">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-xs font-semibold text-white">
+            A
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">Acme Inc.</p>
+            <p className="truncate text-xs text-muted-foreground">{DEMO_MODE ? "Demo workspace" : "Workspace"}</p>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function ConnectionStatus({ apiUp }: { apiUp: boolean | null }) {
+  if (DEMO_MODE) {
+    return (
+      <Badge variant="accent" className="shrink-0">
+        Demo · sample data
+      </Badge>
+    );
+  }
+  const label = apiUp === null ? "Checking API…" : apiUp ? "API connected" : "API unreachable";
+  return (
+    <span className="inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+      <span
+        className={cn(
+          "h-2 w-2 rounded-full",
+          apiUp === null ? "bg-slate-300" : apiUp ? "bg-emerald-500" : "bg-red-500"
+        )}
+      />
+      {label}
+    </span>
+  );
+}
+
+function SectionHeading({ title, description, count }: { title: string; description?: string; count?: number }) {
+  return (
+    <div className="mb-3">
+      <h2 className="flex items-center gap-2 text-base font-semibold">
+        {title}
+        {count !== undefined && (
+          <span className="rounded-full bg-secondary px-2 text-xs font-medium text-muted-foreground tabular">{count}</span>
+        )}
+      </h2>
+      {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+    </div>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: number;
+  hint: string;
+  tone?: "warning";
+}) {
+  return (
+    <div className="rounded-lg border bg-card p-4 shadow-xs">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className={cn("mt-1.5 text-2xl font-semibold tabular", tone === "warning" && "text-amber-700")}>{value}</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- content */
+
+function AttentionRow({ item }: { item: AttentionItem }) {
+  const stuck = item.state === "SILENT_STUCK";
+  const Icon = stuck ? AlertOctagon : AlertTriangle;
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 rounded-lg border border-l-4 bg-card p-4 shadow-xs sm:flex-row sm:items-start",
+        stuck ? "border-l-red-500" : "border-l-amber-500"
+      )}
+    >
+      <div
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
+          stuck ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"
+        )}
+      >
+        <Icon className="h-[18px] w-[18px]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-medium">{item.actor}</p>
+          <HealthBadge state={item.state} />
+        </div>
+        <p className="mt-1 text-sm text-foreground/80">
+          {stuck ? "Has open work but has gone quiet — is this blocked?" : "Lots of effort, no landing — worth a pairing session?"}
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">{item.evidence}</p>
+      </div>
+      <Button asChild variant="outline" size="sm" className="self-start">
+        <a href={`#${slug(item.actor)}`}>
+          View activity <ArrowRight className="h-3.5 w-3.5" />
+        </a>
+      </Button>
+    </div>
+  );
+}
+
+function BlockerRow({ blocker }: { blocker: Blocker }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-l-4 border-l-amber-500 bg-card p-4 shadow-xs sm:flex-row sm:items-start">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-amber-50 text-amber-600">
+        <AlertTriangle className="h-[18px] w-[18px]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="font-medium">{blocker.title}</p>
+          <Badge variant="warning">Possibly blocked</Badge>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">
+          In Progress with no activity for {blocker.hours_since_activity} hours · {blocker.actor} · {blocker.repo}
+        </p>
+      </div>
+      {blocker.url && (
+        <Button asChild variant="outline" size="sm" className="self-start">
+          <a href={blocker.url} target="_blank" rel="noreferrer">
+            Open ticket <ArrowRight className="h-3.5 w-3.5" />
+          </a>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function PersonRow({
+  person,
   slackState,
   onSendSlack,
 }: {
-  actor: string;
-  summary?: string;
-  eventCount?: number;
-  sources?: string[];
-  health?: Health;
-  loading?: boolean;
-  error?: string;
-  delay?: number;
+  person: ActorDigest;
   slackState?: SlackState;
   onSendSlack: () => void;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.35, delay }}
-      whileHover={{ y: -3 }}
-      className="glass relative flex flex-col gap-3 overflow-hidden rounded-xl py-5 pl-6 pr-5 transition-shadow hover:shadow-[0_0_0_1px_hsl(var(--primary)/0.3),0_8px_24px_-8px_hsl(var(--primary)/0.4)]"
-    >
-      {/* Fast at-a-glance color cue for scanning a whole grid of cards */}
-      <div className={`absolute inset-y-0 left-0 w-1 ${health ? healthAccentColor(health.state) : "bg-white/10"}`} />
-
-      <div className="flex items-center gap-2">
-        <ActorAvatar actor={actor} className="h-6 w-6 shrink-0" />
-        <p className="truncate text-xs text-muted-foreground">{actor}</p>
-      </div>
-
-      {health && <HealthHero state={health.state} />}
-
-      {loading && <p className="animate-pulse text-sm text-muted-foreground">Generating digest…</p>}
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {summary && <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>}
-
-      {summary && (
-        <div className="mt-1 flex flex-col gap-1.5 border-t border-white/5 pt-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
-              {eventCount !== undefined && (
-                <span className="inline-flex shrink-0 items-center gap-1">
-                  <Activity className="h-3 w-3" /> {eventCount} event{eventCount !== 1 ? "s" : ""}
-                </span>
-              )}
-              <SourceIcons sources={sources} />
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={slackState?.status === "sending" || slackState?.status === "sent"}
-              onClick={onSendSlack}
-              className="shrink-0"
-            >
-              {slackState?.status === "sent" ? (
-                <>
-                  <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-success" /> Sent
-                </>
-              ) : slackState?.status === "sending" ? (
-                "Sending…"
-              ) : (
-                <>
-                  <Send className="mr-1.5 h-3.5 w-3.5" /> Send to Slack
-                </>
-              )}
-            </Button>
+    <li id={slug(person.actor)} className="scroll-mt-20 px-5 py-5">
+      <div className="grid gap-4 md:grid-cols-[200px_1fr_auto] md:gap-6">
+        <div className="flex items-start gap-3">
+          <ActorAvatar actor={person.actor} />
+          <div className="min-w-0">
+            <p className="truncate font-medium">{person.actor}</p>
+            {person.health && <HealthBadge state={person.health.state} className="mt-1" />}
           </div>
-          {slackState?.status === "error" && (
-            <span className="text-right text-xs text-destructive">{slackState.error}</span>
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-sm leading-6 text-foreground/85">{person.summary}</p>
+          {person.health && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground/70">Signal:</span> {person.health.evidence}
+            </p>
           )}
         </div>
-      )}
-    </motion.div>
+
+        <div className="flex items-center justify-between gap-3 md:flex-col md:items-end md:justify-start">
+          <div className="flex items-center gap-2.5">
+            <span className="text-xs text-muted-foreground tabular">
+              {person.event_count} event{person.event_count !== 1 ? "s" : ""}
+            </span>
+            <SourceIcons sources={person.sources} />
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onSendSlack}
+            disabled={slackState?.status === "sending" || slackState?.status === "sent"}
+            className="-mr-2"
+          >
+            {slackState?.status === "sent" ? (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> Sent
+              </>
+            ) : slackState?.status === "sending" ? (
+              "Sending…"
+            ) : (
+              <>
+                <Send className="h-3.5 w-3.5" /> Send to Slack
+              </>
+            )}
+          </Button>
+          {slackState?.status === "error" && <span className="text-xs text-red-600">{slackState.error}</span>}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+const INTEGRATIONS: { key: string; method: string; detail: string; connected: boolean }[] = [
+  { key: "github", method: "Webhook · HMAC-SHA256", detail: "Pull requests and pushes", connected: true },
+  { key: "linear", method: "Webhook · HMAC-SHA256", detail: "Issues and comments", connected: true },
+  { key: "notion", method: "API polling", detail: "Page edits, synced before each digest", connected: true },
+  { key: "figma", method: "Webhook · passcode", detail: "Comments and version saves", connected: false },
+  { key: "slack", method: "Bot · chat:write", detail: "Daily digest at 09:00 UTC", connected: true },
+];
+
+function IntegrationsTable() {
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card shadow-xs">
+      <table className="w-full text-sm">
+        <thead className="border-b bg-secondary/60 text-left text-xs text-muted-foreground">
+          <tr>
+            <th className="px-5 py-2.5 font-medium">Source</th>
+            <th className="hidden px-5 py-2.5 font-medium sm:table-cell">Method</th>
+            <th className="hidden px-5 py-2.5 font-medium md:table-cell">What it reads</th>
+            <th className="px-5 py-2.5 text-right font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {INTEGRATIONS.map(({ key, method, detail, connected }) => {
+            const { icon: Icon, label } = SOURCE_META[key];
+            return (
+              <tr key={key}>
+                <td className="px-5 py-3">
+                  <span className="inline-flex items-center gap-2.5 font-medium">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md border bg-background">
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    {label}
+                  </span>
+                </td>
+                <td className="hidden px-5 py-3 text-muted-foreground sm:table-cell">{method}</td>
+                <td className="hidden px-5 py-3 text-muted-foreground md:table-cell">{detail}</td>
+                <td className="px-5 py-3 text-right">
+                  {connected ? (
+                    <Badge variant="success">Connected</Badge>
+                  ) : (
+                    <Badge variant="outline">Requires paid plan</Badge>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------- states */
+
+function EmptyState({ onGenerate }: { onGenerate: () => void }) {
+  return (
+    <div className="flex flex-col items-center rounded-lg border border-dashed bg-card px-6 py-14 text-center">
+      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-accent text-primary">
+        <Sparkles className="h-5 w-5" />
+      </div>
+      <h3 className="mt-4 font-semibold">No digest yet today</h3>
+      <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+        Generate a digest to summarize the last 24 hours of team activity and flag anyone who looks stuck.
+      </p>
+      <Button className="mt-5" onClick={onGenerate}>
+        <Sparkles className="h-4 w-4" /> Generate digest
+      </Button>
+    </div>
+  );
+}
+
+function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
+  const quiet = error.toLowerCase().includes("no activity");
+  return (
+    <div className="flex flex-col items-center rounded-lg border bg-card px-6 py-12 text-center shadow-xs">
+      <div
+        className={cn(
+          "flex h-11 w-11 items-center justify-center rounded-full",
+          quiet ? "bg-secondary text-muted-foreground" : "bg-red-50 text-red-600"
+        )}
+      >
+        {quiet ? <CheckCircle2 className="h-5 w-5" /> : <AlertOctagon className="h-5 w-5" />}
+      </div>
+      <h3 className="mt-4 font-semibold">{quiet ? "All quiet in the last 24 hours" : "Couldn't generate the digest"}</h3>
+      <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+        {quiet
+          ? "No team activity was recorded in the window. Push a commit, open a PR, or update a ticket, then try again."
+          : `${error} Check that the API is running and the API key is set.`}
+      </p>
+      <Button variant="outline" className="mt-5" onClick={onRetry}>
+        <RefreshCw className="h-4 w-4" /> Try again
+      </Button>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="space-y-8" aria-busy aria-label="Generating digest">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-[98px] animate-pulse rounded-lg border bg-card p-4">
+            <div className="h-3 w-20 rounded bg-secondary" />
+            <div className="mt-3 h-6 w-10 rounded bg-secondary" />
+          </div>
+        ))}
+      </div>
+      <div className="animate-pulse rounded-lg border bg-card p-6">
+        <div className="h-3 w-40 rounded bg-secondary" />
+        <div className="mt-4 space-y-2.5">
+          <div className="h-3 rounded bg-secondary" />
+          <div className="h-3 rounded bg-secondary" />
+          <div className="h-3 w-2/3 rounded bg-secondary" />
+        </div>
+      </div>
+      <div className="divide-y rounded-lg border bg-card">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex animate-pulse gap-4 px-5 py-5">
+            <div className="h-9 w-9 rounded-full bg-secondary" />
+            <div className="flex-1 space-y-2.5">
+              <div className="h-3 w-32 rounded bg-secondary" />
+              <div className="h-3 rounded bg-secondary" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+        <RefreshCw className="h-4 w-4 animate-spin" /> Reading activity and writing summaries…
+      </p>
+    </div>
   );
 }

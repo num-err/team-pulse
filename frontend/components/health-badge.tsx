@@ -1,5 +1,3 @@
-import { CheckCircle2, Repeat, AlertOctagon, Moon, type LucideIcon } from "lucide-react";
-import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export type HealthState = "HEALTHY" | "THRASHING" | "SILENT_STUCK" | "IDLE";
@@ -9,82 +7,54 @@ export interface Health {
   evidence: string;
 }
 
-const HEALTH_META: Record<HealthState, { label: string; variant: BadgeProps["variant"]; icon: LucideIcon }> = {
-  HEALTHY: { label: "Healthy", variant: "success", icon: CheckCircle2 },
-  THRASHING: { label: "Thrashing", variant: "warning", icon: Repeat },
-  SILENT_STUCK: { label: "Silent & stuck", variant: "destructive", icon: AlertOctagon },
-  IDLE: { label: "Idle", variant: "outline", icon: Moon },
-};
-
-export function HealthBadge({ state, className }: { state: HealthState; className?: string }) {
-  const meta = HEALTH_META[state];
-  const Icon = meta.icon;
-  return (
-    <Badge variant={meta.variant} className={className}>
-      <Icon className="h-3 w-3" /> {meta.label}
-    </Badge>
-  );
-}
-
-// Same four states, tuned for "hero" prominence rather than a compact pill:
-// bigger icon chip + bold colored label. Only THRASHING/SILENT_STUCK pulse —
-// those are the states worth an eye landing on faster; HEALTHY/IDLE stay calm
-// on purpose (an idle actor isn't a problem, see Person Health Engine notes).
-const HEALTH_HERO_META: Record<
+export const HEALTH_META: Record<
   HealthState,
-  { label: string; icon: LucideIcon; iconColor: string; iconBg: string; textColor: string; barColor: string; pulse: boolean }
+  { label: string; pill: string; dot: string; description: string; rank: number }
 > = {
-  HEALTHY: {
-    label: "Healthy",
-    icon: CheckCircle2,
-    iconColor: "text-success",
-    iconBg: "bg-success/15",
-    textColor: "text-success",
-    barColor: "bg-success",
-    pulse: false,
+  SILENT_STUCK: {
+    label: "Silent & stuck",
+    pill: "bg-red-50 text-red-700 ring-red-600/20",
+    dot: "bg-red-500",
+    description: "A ticket is In Progress, but there has been no activity of any kind for 48+ hours.",
+    rank: 0,
   },
   THRASHING: {
     label: "Thrashing",
-    icon: Repeat,
-    iconColor: "text-amber-300",
-    iconBg: "bg-amber-400/15",
-    textColor: "text-amber-300",
-    barColor: "bg-amber-400",
-    pulse: true,
+    pill: "bg-amber-50 text-amber-800 ring-amber-600/25",
+    dot: "bg-amber-500",
+    description:
+      "Heavy churn on one repo or ticket — 8+ events in 3 days with no merge, plus a struggle signal such as failing CI.",
+    rank: 1,
   },
-  SILENT_STUCK: {
-    label: "Silent & stuck",
-    icon: AlertOctagon,
-    iconColor: "text-destructive",
-    iconBg: "bg-destructive/15",
-    textColor: "text-destructive",
-    barColor: "bg-destructive",
-    pulse: true,
+  HEALTHY: {
+    label: "Healthy",
+    pill: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+    dot: "bg-emerald-500",
+    description: "Shipping. Recent activity includes a merged PR, a closed ticket, or a design milestone.",
+    rank: 2,
   },
   IDLE: {
     label: "Idle",
-    icon: Moon,
-    iconColor: "text-muted-foreground",
-    iconBg: "bg-white/5",
-    textColor: "text-muted-foreground",
-    barColor: "bg-white/20",
-    pulse: false,
+    pill: "bg-slate-50 text-slate-600 ring-slate-500/20",
+    dot: "bg-slate-400",
+    description: "No recent activity and nothing open. Not a problem — just quiet.",
+    rank: 3,
   },
 };
 
-export function healthAccentColor(state: HealthState): string {
-  return HEALTH_HERO_META[state].barColor;
-}
-
-export function HealthHero({ state, className }: { state: HealthState; className?: string }) {
-  const meta = HEALTH_HERO_META[state];
-  const Icon = meta.icon;
+/** Compact status pill with a colored dot — the one place health color appears. */
+export function HealthBadge({ state, className }: { state: HealthState; className?: string }) {
+  const meta = HEALTH_META[state];
   return (
-    <div className={cn("flex items-center gap-2.5", className)}>
-      <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", meta.iconBg)}>
-        <Icon className={cn("h-5 w-5", meta.iconColor, meta.pulse && "animate-pulse")} />
-      </div>
-      <p className={cn("text-base font-bold leading-tight", meta.textColor)}>{meta.label}</p>
-    </div>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset",
+        meta.pill,
+        className
+      )}
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
+      {meta.label}
+    </span>
   );
 }

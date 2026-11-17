@@ -22,7 +22,7 @@ export const metadata: Metadata = {
       siteName: "Team Pulse",
       title: TITLE,
       description: DESCRIPTION,
-      images: [{ url: `${SITE_URL}/og.png`, width: 1192, height: 624, alt: "Team Pulse dashboard" }],
+      images: [{ url: `${SITE_URL}/og.png`, width: 1150, height: 602, alt: "Team Pulse dashboard" }],
     },
     twitter: {
       card: "summary_large_image",
@@ -37,8 +37,8 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`dark ${inter.variable}`}>
-      <body className="font-sans antialiased">{children}</body>
+    <html lang="en" className={inter.variable}>
+      <body className="font-sans">{children}</body>
     </html>
   );
 }
