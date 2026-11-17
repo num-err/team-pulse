@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Supabase on every single webhook delivery in the meantime.
 _CACHE_TTL_SECONDS = 60
 
-_cache: dict[tuple[str, str], str] = {}
+_cache: dict[tuple[str, str, str], str] = {}
 _cache_loaded_at: float = 0.0
 _cache_lock = Lock()
 
@@ -35,17 +35,19 @@ def _normalize(value: str) -> str:
     return value.strip().casefold()
 
 
-def _load_aliases() -> dict[tuple[str, str], str]:
+def _load_aliases() -> dict[tuple[str, str, str], str]:
+    # Small table (a handful of rows per team), so one cache for all
+    # workspaces; the workspace_id in the key keeps teams fully separate.
     supabase = get_supabase()
-    result = supabase.table("actor_aliases").select("canonical_name, source, source_actor").execute()
-    mapping: dict[tuple[str, str], str] = {}
+    result = supabase.table("actor_aliases").select("workspace_id, canonical_name, source, source_actor").execute()
+    mapping: dict[tuple[str, str, str], str] = {}
     for row in result.data or []:
-        key = (row["source"], _normalize(row["source_actor"]))
+        key = (str(row["workspace_id"]), row["source"], _normalize(row["source_actor"]))
         mapping[key] = row["canonical_name"]
     return mapping
 
 
-def _get_cache() -> dict[tuple[str, str], str]:
+def _get_cache() -> dict[tuple[str, str, str], str]:
     global _cache, _cache_loaded_at
 
     now = time.monotonic()
@@ -72,8 +74,8 @@ def _get_cache() -> dict[tuple[str, str], str]:
     return _cache
 
 
-def resolve_actor(source: str, raw_actor: str) -> str:
-    """Map a raw per-source actor string to its canonical name.
+def resolve_actor(workspace_id: str, source: str, raw_actor: str) -> str:
+    """Map a raw per-source actor string to its canonical name within a workspace.
 
     Returns `raw_actor` unchanged if there's no mapping for it, or if alias
     resolution itself fails for any reason — see module docstring.
@@ -81,7 +83,7 @@ def resolve_actor(source: str, raw_actor: str) -> str:
     if not raw_actor:
         return raw_actor
     cache = _get_cache()
-    return cache.get((source, _normalize(raw_actor)), raw_actor)
+    return cache.get((str(workspace_id), source, _normalize(raw_actor)), raw_actor)
 
 
 def invalidate_cache() -> None:

@@ -14,10 +14,11 @@ Cast (names are consistent across every source, per-actor):
 All timestamps are relative to now, so the demo looks current no matter when
 this is run.
 
-Usage:
-    cd backend && PYTHONPATH=. .venv/bin/python scripts/seed_demo.py
+Usage (rows go into one workspace — e.g. a "Demo" workspace you created):
+    cd backend && PYTHONPATH=. .venv/bin/python scripts/seed_demo.py <workspace_id>
 """
 
+import sys
 from datetime import datetime, timedelta, timezone
 
 from app.integrations.supabase_client import get_supabase
@@ -337,14 +338,22 @@ for i, (message, failed, hours) in enumerate(_DEV_COMMITS):
     })
 
 
-def main() -> None:
+def main(workspace_id: str) -> None:
     supabase = get_supabase()
-    # Wipe only this script's rows (metadata.demo_cast), so the older
-    # seed_demo_events.py demo cast (if present) is left untouched.
-    supabase.table("activity_events").delete().eq("metadata->>demo_cast", DEMO_CAST_TAG).execute()
-    supabase.table("activity_events").insert(EVENTS).execute()
+    # Wipe only this script's rows (metadata.demo_cast) in this workspace, so
+    # the older seed_demo_events.py cast and real data are left untouched.
+    (
+        supabase.table("activity_events")
+        .delete()
+        .eq("workspace_id", workspace_id)
+        .eq("metadata->>demo_cast", DEMO_CAST_TAG)
+        .execute()
+    )
+    supabase.table("activity_events").insert([{**e, "workspace_id": workspace_id} for e in EVENTS]).execute()
     print(f"Seeded {len(EVENTS)} demo events for Sara Kim, Priya Sharma, Marcus Webb, Dev Okoye.")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        sys.exit("usage: seed_demo.py <workspace_id>")
+    main(sys.argv[1])

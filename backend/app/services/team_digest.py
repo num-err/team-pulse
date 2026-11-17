@@ -20,13 +20,14 @@ _TEAM_SYSTEM_PROMPT = (
 )
 
 
-def generate_team_digest() -> dict:
+def generate_team_digest(workspace_id: str) -> dict:
     supabase = get_supabase()
     since = datetime.now(timezone.utc) - timedelta(hours=24)
 
     result = (
         supabase.table("activity_events")
         .select("actor")
+        .eq("workspace_id", workspace_id)
         .gte("received_at", since.isoformat())
         .execute()
     )
@@ -43,7 +44,7 @@ def generate_team_digest() -> dict:
     actor_digests = []
     for actor in actors:
         try:
-            actor_digests.append(generate_digest(actor))
+            actor_digests.append(generate_digest(workspace_id, actor))
         except HTTPException as exc:
             if exc.status_code == status.HTTP_404_NOT_FOUND:
                 continue  # benign race: actor had events at discovery but none in digest window
@@ -91,6 +92,6 @@ def generate_team_digest() -> dict:
             }
             for d in actor_digests
         ],
-        "blockers": find_blockers(),
+        "blockers": find_blockers(workspace_id),
         "attention": attention,
     }

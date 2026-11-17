@@ -196,7 +196,7 @@ def classify_actor(actor: str, events: list[dict], now: datetime | None = None) 
     }
 
 
-def get_actor_health(actor: str) -> dict:
+def get_actor_health(workspace_id: str, actor: str) -> dict:
     supabase = get_supabase()
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=LOOKBACK_DAYS)
@@ -204,6 +204,7 @@ def get_actor_health(actor: str) -> dict:
     result = (
         supabase.table("activity_events")
         .select("*")
+        .eq("workspace_id", workspace_id)
         .eq("actor", actor)
         .gte("received_at", since.isoformat())
         .order("received_at")
@@ -216,7 +217,7 @@ def get_actor_health(actor: str) -> dict:
 _STATE_PRIORITY = {"SILENT_STUCK": 0, "THRASHING": 1, "HEALTHY": 2, "IDLE": 3}
 
 
-def classify_team_health() -> list[dict]:
+def classify_team_health(workspace_id: str) -> list[dict]:
     supabase = get_supabase()
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=LOOKBACK_DAYS)
@@ -224,6 +225,7 @@ def classify_team_health() -> list[dict]:
     result = (
         supabase.table("activity_events")
         .select("*")
+        .eq("workspace_id", workspace_id)
         .gte("received_at", since.isoformat())
         .order("received_at")
         .execute()

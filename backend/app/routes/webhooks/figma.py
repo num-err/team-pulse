@@ -1,17 +1,17 @@
+import hmac
 import json
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app.config import get_settings
-from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
-from app.services.identity import resolve_actor
+from app.routes.webhooks.common import store_events, webhook_secret_for
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
 def _verify_passcode(payload_passcode: str, secret: str) -> None:
-    if payload_passcode != secret:
+    if not hmac.compare_digest(str(payload_passcode), secret):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid passcode")
 
 
@@ -57,14 +57,12 @@ def _normalize_version(payload: dict) -> ActivityEvent:
     )
 
 
-@router.post("/figma", status_code=status.HTTP_204_NO_CONTENT)
-async def figma_webhook(request: Request):
+@router.post("/figma/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def figma_webhook(workspace_id: UUID, request: Request):
     body = await request.body()
     payload = json.loads(body)
 
-    settings = get_settings()
-    if settings.figma_webhook_passcode:
-        _verify_passcode(payload.get("passcode", ""), settings.figma_webhook_passcode)
+    _verify_passcode(payload.get("passcode", ""), webhook_secret_for(workspace_id, "figma"))
 
     event_type = payload.get("event_type")
 
@@ -78,10 +76,4 @@ async def figma_webhook(request: Request):
         event = _normalize_version(payload)
 
     if event:
-        event.actor = resolve_actor(event.source, event.actor)
-        supabase = get_supabase()
-        supabase.table("activity_events").upsert(
-            event.model_dump(),
-            on_conflict="dedup_key",
-            ignore_duplicates=True,
-        ).execute()
+        store_events(workspace_id, [event])

@@ -1,13 +1,12 @@
 import hashlib
 import hmac
 import json
+from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from app.config import get_settings
-from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
-from app.services.identity import resolve_actor
+from app.routes.webhooks.common import store_events, webhook_secret_for
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -84,19 +83,19 @@ def _normalize_push(payload: dict) -> list[ActivityEvent]:
     return events
 
 
-@router.post("/github", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/github/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def github_webhook(
+    workspace_id: UUID,
     request: Request,
     x_github_event: str = Header(...),
     x_hub_signature_256: str = Header(None),
 ):
     body = await request.body()
 
-    settings = get_settings()
-    if settings.github_webhook_secret:
-        if not x_hub_signature_256:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing signature")
-        _verify_signature(body, x_hub_signature_256, settings.github_webhook_secret)
+    secret = webhook_secret_for(workspace_id, "github")
+    if not x_hub_signature_256:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing signature")
+    _verify_signature(body, x_hub_signature_256, secret)
 
     if x_github_event == "ping":
         return
@@ -111,12 +110,4 @@ async def github_webhook(
     elif x_github_event == "push":
         events.extend(_normalize_push(payload))
 
-    if events:
-        for e in events:
-            e.actor = resolve_actor(e.source, e.actor)
-        supabase = get_supabase()
-        supabase.table("activity_events").upsert(
-            [e.model_dump() for e in events],
-            on_conflict="dedup_key",
-            ignore_duplicates=True,
-        ).execute()
+    store_events(workspace_id, events)

@@ -2,6 +2,8 @@ from pydantic import BaseModel
 
 
 class ActivityEvent(BaseModel):
+    # Set at ingestion from the webhook URL / sync job; every stored row has one.
+    workspace_id: str | None = None
     source: str
     event_type: str
     actor: str

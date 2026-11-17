@@ -1,43 +1,46 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.deps import require_api_key
+from app.deps import Membership, require_member
 from app.services.digest import generate_digest
-from app.services.slack import post_digest, post_team_digest
+from app.services.slack import SlackNotConfigured, post_digest, post_team_digest, slack_destination
 from app.services.team_digest import generate_team_digest
 
-router = APIRouter(prefix="/slack", tags=["slack"])
+router = APIRouter(prefix="/workspaces/{workspace_id}/slack", tags=["slack"])
+
+_CHANNEL_PATTERN = r"^[CG][A-Z0-9]{6,}$"
 
 
-@router.post("/deliver", dependencies=[Depends(require_api_key)])
-def deliver_digest(
-    actor: str = Query(..., description="GitHub username to summarize and deliver"),
-    channel: str = Query(None, description="Slack channel override"),
-):
-    digest = generate_digest(actor)
-
+def _destination(workspace_id: str, channel: str | None):
     try:
-        ts = post_digest(digest, channel=channel)
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Slack error: {exc}",
-        ) from exc
+        return slack_destination(workspace_id, channel)
+    except SlackNotConfigured as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+
+@router.post("/deliver")
+def deliver_digest(
+    actor: str = Query(..., description="Person to summarize and deliver"),
+    channel: str | None = Query(None, pattern=_CHANNEL_PATTERN, description="Slack channel ID override"),
+    m: Membership = Depends(require_member),
+):
+    dest = _destination(m.workspace_id, channel)
+    digest = generate_digest(m.workspace_id, actor)
+    try:
+        ts = post_digest(digest, dest)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Slack error: {exc}") from exc
     return {**digest, "slack_ts": ts, "delivered": True}
 
 
-@router.post("/deliver-team", dependencies=[Depends(require_api_key)])
+@router.post("/deliver-team")
 def deliver_team_digest(
-    channel: str = Query(None, description="Slack channel override"),
+    channel: str | None = Query(None, pattern=_CHANNEL_PATTERN, description="Slack channel ID override"),
+    m: Membership = Depends(require_member),
 ):
-    team_digest = generate_team_digest()
-
+    dest = _destination(m.workspace_id, channel)
+    team_digest = generate_team_digest(m.workspace_id)
     try:
-        ts = post_team_digest(team_digest, channel=channel)
+        ts = post_team_digest(team_digest, dest)
     except RuntimeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Slack error: {exc}",
-        ) from exc
-
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Slack error: {exc}") from exc
     return {**team_digest, "slack_ts": ts, "delivered": True}

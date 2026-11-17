@@ -1,17 +1,17 @@
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import health, digest, slack, scheduler, notion
-from app.routes.webhooks import github as github_webhook
+from app.routes import digest, health, notion, scheduler, slack, workspaces
 from app.routes.webhooks import figma as figma_webhook
+from app.routes.webhooks import github as github_webhook
 from app.routes.webhooks import linear as linear_webhook
-from app.services.notion import sync_notion
-from app.services.scheduler import MISFIRE_GRACE_SECONDS, catch_up_if_missed, run_daily_digests
+from app.services.scheduler import run_due_workspaces
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -19,31 +19,21 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _scheduler = BackgroundScheduler()
+    _scheduler = BackgroundScheduler(timezone=timezone.utc)
+    # One tick checks every workspace against its own local digest time
+    # (see services/scheduler.py). next_run_time=now also runs it at boot,
+    # which is what catches up after the process was down across a team's
+    # scheduled time.
     _scheduler.add_job(
-        run_daily_digests,
-        "cron",
-        hour=settings.digest_cron_hour,
-        minute=settings.digest_cron_minute,
-        id="daily_digest",
-        misfire_grace_time=MISFIRE_GRACE_SECONDS,
-    )
-    _scheduler.add_job(
-        sync_notion,
-        "cron",
-        hour=settings.digest_cron_hour,
-        minute=max(0, settings.digest_cron_minute - 5),
-        id="notion_sync",
-        misfire_grace_time=MISFIRE_GRACE_SECONDS,
+        run_due_workspaces,
+        "interval",
+        minutes=settings.scheduler_tick_minutes,
+        id="digest_tick",
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
     )
     _scheduler.start()
-    try:
-        # Covers a full process restart spanning the scheduled time, which
-        # misfire_grace_time above does not — a brand new scheduler has no
-        # memory of a cron tick it never got the chance to register.
-        catch_up_if_missed()
-    except Exception:
-        logger.exception("Startup catch-up check failed")
     yield
     _scheduler.shutdown(wait=False)
 
@@ -51,7 +41,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Team Pulse API",
     description="Backend for Team Pulse — a zero-input async standup tool.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -64,13 +54,14 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
-app.include_router(github_webhook.router)
-app.include_router(notion.router)
-app.include_router(linear_webhook.router)
-app.include_router(figma_webhook.router)
+app.include_router(workspaces.router)
 app.include_router(digest.router)
 app.include_router(slack.router)
 app.include_router(scheduler.router)
+app.include_router(notion.router)
+app.include_router(github_webhook.router)
+app.include_router(linear_webhook.router)
+app.include_router(figma_webhook.router)
 
 
 @app.get("/")

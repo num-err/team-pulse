@@ -82,7 +82,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Stand-in for the real API: same response shapes, canned data, simulated latency. */
 export async function demoPost(path: string): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
   const url = new URL(path, "http://demo");
-  switch (url.pathname) {
+  // Real routes are workspace-scoped (/workspaces/{id}/digest/team); the
+  // demo has a single sample workspace, so the prefix is ignored.
+  switch (url.pathname.replace(/^\/workspaces\/[^/]+/, "")) {
     case "/digest/team":
       await sleep(1600);
       return { ok: true, data: teamDigest() };

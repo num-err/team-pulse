@@ -2,6 +2,8 @@
 
 Zero-input async standup tool. Generates daily standup digests from signals the team already produces (GitHub activity, etc.) — no forms, no Slack-bot nags.
 
+**Status (2026-11-16): multi-tenant workspaces + Supabase Auth built, not yet deployed.** The original single-team Supabase project was shut down. Phase 1 of the pilot plan (workspaces, auth, data isolation) is implemented and tested locally (61 backend tests, both frontend builds pass) but has never run against a real Supabase project — see **Multi-Tenancy & Auth** below for what's done, what to set up, and what's next. Everything dated before 2026-11-16 below describes the single-team version; where it conflicts with the Multi-Tenancy & Auth section, that section wins.
+
 **Status (2026-07-13):** GitHub webhook → AI synthesis → Slack delivery → daily scheduler → Linear webhook → Notion polling → API key auth → multi-actor team digest all complete and verified end-to-end. Dashboard redesigned around the team digest as the primary flow, with a dark/gradient UI polished for live pitches. Added blocker detection (stale in-progress Linear issues surfaced as a prominent alert card), per-actor source icons, event-count badges, a live "last updated" timestamp, a polished empty state, and a repeatable demo-data seed script (`backend/scripts/seed_demo_events.py`). Added a **person health engine** (HEALTHY / THRASHING / SILENT_STUCK / IDLE classification per actor, surfaced as dashboard alert cards + badges, a Slack "⚠ Attention" section, and folded into the AI digest tone) plus a dedicated seed script for a screen-recorded demo (`backend/scripts/seed_demo.py`) — see Person Health Engine and Demo Data Seeding sections below. This was built purely against seeded Supabase data; no webhook/integration code was touched. Dashboard now visually verified in-browser (see Frontend Dev Gotcha note below for a `.next` cache issue hit and fixed along the way), and the live-narration pitch script for this demo is finalized in `PITCH.md`, cross-checked against the actual seeded evidence numbers. Next: production deployment.
 
 **⚠️ Backend now runs on port 8001, not 8000** — port 8000 is occupied by an unrelated local project on this machine. The live ngrok tunnel, the registered GitHub webhook, and `frontend/.env.local`'s `NEXT_PUBLIC_API_URL` all already point at 8001. See the YC Demo Prep section below for the full pre-Sunday checklist.
@@ -137,19 +139,19 @@ backend/tests/                      # pytest — see Backend → Tests above
 └── test_blockers.py                # find_blockers() — against a fake Supabase client
 ```
 
-**Routes:**
-- `GET /` → `{"name": "Team Pulse API", "version": "0.1.0"}`
-- `GET /health` → service status + supabase_configured flag
-- `GET /health/team` → per-actor health classification (HEALTHY/THRASHING/SILENT_STUCK/IDLE) + evidence line (auth required)
-- `POST /webhooks/github` → receives GitHub webhook events, normalizes, stores to Supabase
-- `POST /webhooks/linear` → receives Linear webhook events (HMAC-SHA256 via `Linear-Signature` header)
-- `POST /webhooks/figma` → receives Figma webhook events (passcode in payload body) — requires paid Figma plan to register
-- `POST /digest/generate?actor=<github-login>` → queries last 24h of events, calls Claude Haiku, returns summary JSON
-- `POST /slack/deliver?actor=<github-login>[&channel=<id>]` → generate + post to Slack, returns digest + `slack_ts`
-- `GET /scheduler/status` → last run time + per-actor results
-- `POST /scheduler/run-now` → manually trigger the daily digest job immediately
-- `GET /notion/status` → last Notion sync time + events stored
-- `POST /notion/sync` → manually trigger a Notion poll immediately
+**Routes** (since 2026-11-16 — every data route is workspace-scoped and needs `Authorization: Bearer <Supabase access token>`; non-members get 404):
+- `GET /` · `GET /health` → public liveness
+- `GET /me` → signed-in user + their workspaces (with role)
+- `GET|POST /workspaces`, `GET|PATCH /workspaces/{id}` → list/create; read/update name, timezone, digest time (PATCH = admin)
+- `GET /workspaces/{id}/integrations` → connection status per provider (+ webhook URLs), never secrets
+- `POST /workspaces/{id}/integrations/{github|linear|figma}/webhook` → create/rotate that source's webhook secret; secret returned once (admin)
+- `PUT /workspaces/{id}/integrations/slack` (`{bot_token, channel}`, token validated via `auth.test`) · `PUT .../integrations/notion` (`{token}`) · `DELETE .../integrations/{provider}` (admin)
+- `POST /workspaces/{id}/digest/team` · `POST /workspaces/{id}/digest/generate?actor=`
+- `POST /workspaces/{id}/slack/deliver-team` · `POST /workspaces/{id}/slack/deliver?actor=` (409 if Slack not connected)
+- `GET /workspaces/{id}/health/team`
+- `GET /workspaces/{id}/scheduler/status` · `POST .../scheduler/run-now` (admin; counts as today's run)
+- `GET /workspaces/{id}/notion/status` · `POST .../notion/sync` (admin)
+- `POST /webhooks/{github|linear|figma}/{workspace_id}` → signed with that workspace's own secret; unknown workspace 404, no secret configured 401
 
 ---
 
@@ -478,33 +480,27 @@ curl -X POST https://api.figma.com/v2/webhooks \
 
 ---
 
-## Auth (complete)
+## Multi-Tenancy & Auth (built 2026-11-16, not yet deployed)
 
-**Dependency:** `backend/app/deps.py` → `require_api_key`
+Replaces the old single shared `API_KEY` / `NEXT_PUBLIC_API_KEY` scheme (removed — that key was shipped in the browser bundle, i.e. public).
 
-Uses FastAPI's `APIKeyHeader` (`X-API-Key` header). Applied as a router-level dependency on all non-webhook routes:
-- `/digest/generate`, `/slack/deliver`, `/scheduler/*`, `/notion/*`
+**Data model** — `backend/migrations/0000_activity_events.sql` (new baseline: the table was previously only created by hand) and `0004_workspaces.sql`: `workspaces` (name, IANA `timezone`, `digest_hour`/`digest_minute`), `workspace_members` (owner/admin/member, FK to `auth.users`), `workspace_integrations` (per provider: secret `credentials` jsonb + non-secret `settings` jsonb). `workspace_id` NOT NULL on `activity_events` and `actor_aliases`, nullable on `job_runs`. Dedup is now `UNIQUE (workspace_id, dedup_key)`; aliases unique per `(workspace_id, source, source_actor)`. **RLS enabled on every table with no policies** — the backend uses the service-role key and enforces membership itself; the public anon key (frontend, sign-in only) can read nothing. 0004 assumes a fresh project (NOT NULL fails if old rows exist — see its header).
 
-Webhooks (`/webhooks/github`, `/webhooks/linear`, `/webhooks/figma`) stay unprotected — they use their own HMAC/passcode auth.
+**Auth** — `backend/app/auth.py`: verifies Supabase access tokens locally (no network call per request): RS256/ES256 via the project's JWKS (`/auth/v1/.well-known/jwks.json`, cached), or HS256 via `SUPABASE_JWT_SECRET` for legacy projects; requires a valid signature, `exp`, `aud=authenticated`, and this project's `iss`; `alg: none` rejected. `app/deps.py`: `require_member` (404 for non-members, so workspace IDs can't be probed) and `require_admin` (403).
 
-**Behavior:**
-- `API_KEY` not set in `.env` → auth skipped (open in dev, preserves current behavior)
-- `API_KEY` set → header must match exactly, else `401 Unauthorized`
+**Isolation** — every query in `digest.py`, `team_digest.py`, `health.py` (both queries), `blockers.py`, `notion.py`, `job_runs.py` filters on `workspace_id`; the identity cache is keyed `(workspace_id, source, handle)`. `tests/test_workspaces.py::test_team_digest_only_sees_own_workspace` uses two teams that both have a "Marcus Webb"; mutation-checked 2026-11-16 — deleting the filter in `digest.py` or in either `health.py` query makes it fail. (Deleting only the actor-discovery filter in `team_digest.py` does not, because each per-person digest re-filters by workspace, so nothing leaks.)
 
-**Generate a key:**
-```bash
-python -c "import secrets; print('tpulse_' + secrets.token_urlsafe(32))"
-```
+**Per-workspace credentials** — webhook secrets, Slack bot token + channel, and Notion token live in `workspace_integrations`, set via the integration routes above (concierge path until OAuth installs exist). Env `SLACK_BOT_TOKEN` / `SLACK_DEFAULT_CHANNEL` / `NOTION_TOKEN` are development-only fallbacks, ignored when `APP_ENV=production`. Secrets are stored as plain jsonb (protected by RLS + service-role-only access), **not yet encrypted at the application level** — do that before storing OAuth tokens.
 
-Add to `backend/.env`:
-```
-API_KEY=tpulse_<generated>
-```
+**Scheduler (rewritten)** — `services/scheduler.py`: one APScheduler interval job (`SCHEDULER_TICK_MINUTES`, default 15, also runs at boot) calls `run_due_workspaces()`; `is_due()` (pure, tested) fires once the workspace's *local* time passes its digest time. It now posts **one team digest per workspace** (previously one message per person). Double-post guards: every attempt is recorded in `job_runs` with a status; `delivered` / `no_activity` / `not_configured` settle the day; `error` is retried on later ticks up to 3/day; unreadable run history means skip (fail closed); an in-process memo covers a failed `record_run` after a successful post. `catch_up_if_missed()` and the two fixed UTC cron jobs are gone (the boot tick replaces catch-up). Notion sync now runs inside each workspace's digest run instead of a separate cron.
 
-Add to `frontend/.env.local` (if using the dashboard against a keyed backend):
-```
-NEXT_PUBLIC_API_KEY=tpulse_<generated>
-```
+**Frontend** — `lib/supabase.ts` (anon client, PKCE), `lib/api.ts` (`api()` sends the Bearer token; `ws(id, path)`), `lib/session.tsx` (`SessionProvider`: loads `/me`, remembers the last workspace in localStorage, redirects to `/login` when signed out; demo mode supplies a fixed sample workspace). New pages: `/login` (Google, GitHub, email magic link) and `/onboarding` (create workspace: name, timezone pre-filled from the browser, digest time). Dashboard: gate to onboarding if no workspace; sidebar workspace switcher, user email, new-workspace and sign-out buttons; integrations table shows live connection status. Demo mode behaves as before (`lib/demo.ts` strips the `/workspaces/{id}` prefix). Frontend env template: `frontend/.env.local.example`.
+
+**Verified 2026-11-16 (locally, no real Supabase):** backend `pytest` 61 passed (new: `test_auth.py`, `test_workspaces.py`, `test_webhooks.py`, `test_scheduler.py`, in-memory `tests/fakes.py`); `tsc` clean; demo build and app build both succeed; in Chrome the demo dashboard still renders through `SessionProvider`, and in app mode a signed-out `/dashboard` redirects to `/login`. **Not verified:** real sign-in, real Postgres/RLS behavior, migrations applied to a project, PostgREST accepting `on_conflict="workspace_id,dedup_key"` (believed correct, untested).
+
+**To bring it up:** 1) new Supabase project; run migrations 0000 to 0004 in the SQL editor; 2) Auth: enable Email (and Google/GitHub providers if wanted), set Site URL + redirect URL to the app's `/dashboard`; 3) backend `.env`: `SUPABASE_URL`, `SUPABASE_KEY` (service role), `ANTHROPIC_API_KEY`, `PUBLIC_API_URL`, `CORS_ORIGINS` (+ `SUPABASE_JWT_SECRET` only if the project uses legacy HS256); 4) frontend `.env.local` from `.env.local.example`; 5) sign in, create a workspace, set up integrations via the API (no settings UI yet).
+
+**Next (phase 2):** settings/integrations UI in the app; "Add to Slack" OAuth; GitHub App; Linear/Notion OAuth; inviting teammates (only the creator is a member today unless rows are inserted by hand); 7-day backfill for an instant first digest; app-level encryption of stored tokens; pilot invite gating.
 
 ---
 

@@ -1,6 +1,6 @@
 """Tests for app.services.blockers.find_blockers().
 
-Unlike classify_actor(), find_blockers() is not pure — it calls
+Unlike classify_actor(), find_blockers(WS) is not pure — it calls
 get_supabase() directly and reads datetime.now() internally rather than
 accepting it as a parameter. Tested here against a fake Supabase client
 (monkeypatched onto app.services.blockers.get_supabase) instead of a real
@@ -13,6 +13,7 @@ import app.services.blockers as blockers_mod
 from app.services.blockers import BLOCKER_THRESHOLD_HOURS, find_blockers
 
 NOW = datetime.now(timezone.utc)
+WS = "11111111-2222-3333-4444-555555555555"
 
 
 def hours_ago(h: float) -> str:
@@ -52,6 +53,7 @@ class _FakeSupabase:
 
 
 def _patch_supabase(monkeypatch, rows: list[dict]) -> None:
+    rows = [{"workspace_id": WS, **r} for r in rows]
     monkeypatch.setattr(blockers_mod, "get_supabase", lambda: _FakeSupabase(rows))
 
 
@@ -63,7 +65,7 @@ def test_stale_in_progress_issue_is_flagged_with_correct_hours(monkeypatch):
     }]
     _patch_supabase(monkeypatch, rows)
 
-    blockers = find_blockers()
+    blockers = find_blockers(WS)
 
     assert len(blockers) == 1
     assert blockers[0]["title"] == "Payment UI Review"
@@ -79,7 +81,7 @@ def test_fresh_in_progress_issue_is_not_flagged(monkeypatch):
     }]
     _patch_supabase(monkeypatch, rows)
 
-    assert find_blockers() == []
+    assert find_blockers(WS) == []
 
 
 def test_completed_ticket_is_not_flagged_even_though_it_was_started_long_ago(monkeypatch):
@@ -95,7 +97,7 @@ def test_completed_ticket_is_not_flagged_even_though_it_was_started_long_ago(mon
     ]
     _patch_supabase(monkeypatch, rows)
 
-    assert find_blockers() == []
+    assert find_blockers(WS) == []
 
 
 def test_threshold_boundary_is_flagged(monkeypatch):
@@ -109,7 +111,7 @@ def test_threshold_boundary_is_flagged(monkeypatch):
     }]
     _patch_supabase(monkeypatch, rows)
 
-    assert len(find_blockers()) == 1
+    assert len(find_blockers(WS)) == 1
 
 
 def test_non_linear_events_are_ignored(monkeypatch):
@@ -122,4 +124,15 @@ def test_non_linear_events_are_ignored(monkeypatch):
     }]
     _patch_supabase(monkeypatch, rows)
 
-    assert find_blockers() == []
+    assert find_blockers(WS) == []
+
+
+def test_other_workspaces_stale_tickets_are_not_reported(monkeypatch):
+    rows = [{
+        "workspace_id": "99999999-0000-0000-0000-000000000000",
+        "source": "linear", "event_type": "issue_started", "actor": "Someone Else",
+        "repo": "OTHER", "title": "Another team's ticket", "url": "x",
+        "metadata": {"identifier": "OTHER-1"}, "received_at": hours_ago(90),
+    }]
+    monkeypatch.setattr(blockers_mod, "get_supabase", lambda: _FakeSupabase(rows))
+    assert find_blockers(WS) == []

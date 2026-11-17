@@ -65,13 +65,14 @@ _SYSTEM_PROMPT = (
 MODEL = "claude-haiku-4-5"
 
 
-def generate_digest(actor: str) -> dict:
+def generate_digest(workspace_id: str, actor: str) -> dict:
     supabase = get_supabase()
 
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     result = (
         supabase.table("activity_events")
         .select("*")
+        .eq("workspace_id", workspace_id)
         .eq("actor", actor)
         .gte("received_at", since.isoformat())
         .execute()
@@ -90,7 +91,7 @@ def generate_digest(actor: str) -> dict:
         for e in events
     )
 
-    health = get_actor_health(actor)
+    health = get_actor_health(workspace_id, actor)
 
     client = anthropic.Anthropic(api_key=get_settings().anthropic_api_key)
     response = _call_claude(

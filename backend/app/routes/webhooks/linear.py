@@ -1,13 +1,12 @@
 import hashlib
 import hmac
 import json
+from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
-from app.config import get_settings
-from app.integrations.supabase_client import get_supabase
 from app.models.activity_event import ActivityEvent
-from app.services.identity import resolve_actor
+from app.routes.webhooks.common import store_events, webhook_secret_for
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -87,18 +86,18 @@ def _normalize_comment(action: str, data: dict) -> ActivityEvent | None:
     )
 
 
-@router.post("/linear", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/linear/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def linear_webhook(
+    workspace_id: UUID,
     request: Request,
     linear_signature: str = Header(None),
 ):
     body = await request.body()
 
-    settings = get_settings()
-    if settings.linear_webhook_secret:
-        if not linear_signature:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing signature")
-        _verify_signature(body, linear_signature, settings.linear_webhook_secret)
+    secret = webhook_secret_for(workspace_id, "linear")
+    if not linear_signature:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing signature")
+    _verify_signature(body, linear_signature, secret)
 
     payload = json.loads(body)
     event_type = payload.get("type")
@@ -112,10 +111,4 @@ async def linear_webhook(
         event = _normalize_comment(action, data)
 
     if event:
-        event.actor = resolve_actor(event.source, event.actor)
-        supabase = get_supabase()
-        supabase.table("activity_events").upsert(
-            event.model_dump(),
-            on_conflict="dedup_key",
-            ignore_duplicates=True,
-        ).execute()
+        store_events(workspace_id, [event])

@@ -9,6 +9,7 @@ from app.models.activity_event import ActivityEvent
 from app.services.identity import resolve_actor
 from app.services.job_runs import get_last_run as _get_last_run_record
 from app.services.job_runs import record_run
+from app.services.workspaces import get_integration
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,22 @@ _NOTION_VERSION = "2022-06-28"
 JOB_NAME = "notion_sync"
 
 
-def get_last_sync() -> dict | None:
-    return _get_last_run_record(JOB_NAME)
+def get_last_sync(workspace_id: str) -> dict | None:
+    return _get_last_run_record(JOB_NAME, workspace_id)
 
 
-def _synced_floor() -> datetime | None:
+def notion_token_for(workspace_id: str) -> str | None:
+    """The workspace's own Notion token; the env NOTION_TOKEN is a
+    development-only fallback."""
+    integration = get_integration(workspace_id, "notion") or {}
+    token = (integration.get("credentials") or {}).get("token")
+    settings = get_settings()
+    if not token and not settings.is_production:
+        token = settings.notion_token or None
+    return token
+
+
+def _synced_floor(workspace_id: str) -> datetime | None:
     """Latest received_at already stored for source='notion', or None if empty.
 
     Derived from Supabase rather than an in-memory timestamp so the dedup
@@ -33,6 +45,7 @@ def _synced_floor() -> datetime | None:
     result = (
         supabase.table("activity_events")
         .select("received_at")
+        .eq("workspace_id", workspace_id)
         .eq("source", "notion")
         .order("received_at", desc=True)
         .limit(1)
@@ -77,14 +90,13 @@ def _resolve_user(client: httpx.Client, token: str, user_id: str, cache: dict) -
     return user_id
 
 
-def sync_notion() -> dict:
-    settings = get_settings()
-    token = settings.notion_token
+def sync_notion(workspace_id: str) -> dict:
+    token = notion_token_for(workspace_id)
     if not token:
-        return {"error": "NOTION_TOKEN not configured", "events_stored": 0}
+        return {"error": "Notion isn't connected for this workspace", "events_stored": 0}
 
     sync_started_at = datetime.now(timezone.utc)
-    since = _synced_floor()
+    since = _synced_floor(workspace_id)
     user_cache: dict[str, str] = {}
     events: list[ActivityEvent] = []
 
@@ -128,6 +140,7 @@ def sync_notion() -> dict:
                 actor = _resolve_user(client, token, actor_id, user_cache) if actor_id else ""
 
                 events.append(ActivityEvent(
+                    workspace_id=workspace_id,
                     source="notion",
                     event_type=event_type,
                     actor=actor,
@@ -142,7 +155,7 @@ def sync_notion() -> dict:
 
     if events:
         for e in events:
-            e.actor = resolve_actor(e.source, e.actor)
+            e.actor = resolve_actor(workspace_id, e.source, e.actor)
         supabase = get_supabase()
         supabase.table("activity_events").insert([e.model_dump() for e in events]).execute()
         logger.info("Notion sync stored %d events", len(events))
@@ -151,5 +164,5 @@ def sync_notion() -> dict:
         "ran_at": sync_started_at.isoformat(),
         "events_stored": len(events),
     }
-    record_run(JOB_NAME, sync_started_at, {"events_stored": len(events)})
+    record_run(JOB_NAME, sync_started_at, {"events_stored": len(events)}, workspace_id)
     return run_record

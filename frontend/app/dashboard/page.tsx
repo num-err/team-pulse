@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   AlertOctagon,
   AlertTriangle,
@@ -9,7 +10,9 @@ import {
   CheckCircle2,
   Github,
   LayoutDashboard,
+  LogOut,
   Plug,
+  Plus,
   RefreshCw,
   Search,
   Send,
@@ -23,7 +26,9 @@ import { ActorAvatar } from "@/components/actor-avatar";
 import { SourceIcons, SOURCE_META } from "@/components/source-icons";
 import { HealthBadge, HEALTH_META, type Health, type HealthState } from "@/components/health-badge";
 import { LogoMark } from "@/components/logo";
-import { DEMO_MODE, demoPost } from "@/lib/demo";
+import { DEMO_MODE } from "@/lib/demo";
+import { api, API_URL, ws, type Integration, type Workspace } from "@/lib/api";
+import { SessionProvider, useSession } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ types */
@@ -79,27 +84,7 @@ type SoloState =
 
 /* -------------------------------------------------------------------- api */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 const REPO_URL = "https://github.com/num-err/team-pulse";
-
-function apiHeaders(): HeadersInit {
-  return API_KEY ? { "X-API-Key": API_KEY } : {};
-}
-
-async function apiPost<T>(path: string): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
-  if (DEMO_MODE) return (await demoPost(path)) as { ok: true; data: T } | { ok: false; error: string };
-  try {
-    const res = await fetch(`${API_URL}${path}`, { method: "POST", headers: apiHeaders() });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      return { ok: false, error: body.detail ?? `Error ${res.status}` };
-    }
-    return { ok: true, data: (await res.json()) as T };
-  } catch {
-    return { ok: false, error: "Could not reach the API." };
-  }
-}
 
 const slug = (s: string) => `person-${s.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 
@@ -113,21 +98,72 @@ function formatDate(iso: string) {
 /* ------------------------------------------------------------------- page */
 
 export default function DashboardPage() {
+  return (
+    <SessionProvider>
+      <DashboardGate />
+    </SessionProvider>
+  );
+}
+
+/** Waits for the session; sends signed-in users with no workspace to onboarding. */
+function DashboardGate() {
+  const router = useRouter();
+  const { state } = useSession();
+  const needsWorkspace = state.status === "ready" && !state.workspace;
+
+  useEffect(() => {
+    if (needsWorkspace) router.replace("/onboarding");
+  }, [needsWorkspace, router]);
+
+  if (state.status === "error") {
+    return (
+      <CenteredMessage title="Couldn't load your account" body={state.error}>
+        <Button asChild variant="outline">
+          <Link href="/login">Back to sign in</Link>
+        </Button>
+      </CenteredMessage>
+    );
+  }
+  if (state.status !== "ready" || !state.workspace) {
+    return (
+      <CenteredMessage title="Loading your workspace…">
+        <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
+      </CenteredMessage>
+    );
+  }
+  return <Dashboard key={state.workspace.id} workspace={state.workspace} />;
+}
+
+function CenteredMessage({ title, body, children }: { title: string; body?: string; children?: React.ReactNode }) {
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-background px-4 text-center">
+      <LogoMark className="h-9 w-9" />
+      <h1 className="font-semibold">{title}</h1>
+      {body && <p className="max-w-sm text-sm text-muted-foreground">{body}</p>}
+      {children}
+    </main>
+  );
+}
+
+function Dashboard({ workspace }: { workspace: Workspace }) {
   const [apiUp, setApiUp] = useState<boolean | null>(null);
   const [team, setTeam] = useState<TeamState>({ status: "idle" });
   const [teamSlack, setTeamSlack] = useState<SlackState>({ status: "idle" });
   const [personSlack, setPersonSlack] = useState<Record<string, SlackState>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [integrations, setIntegrations] = useState<Integration[] | null>(null);
 
   const [lookupInput, setLookupInput] = useState("");
   const [lookupActors, setLookupActors] = useState<string[]>([]);
   const [lookupDigests, setLookupDigests] = useState<Record<string, SoloState>>({});
 
+  const path = (p: string) => ws(workspace.id, p);
+
   async function generateTeamDigest() {
     setTeam({ status: "loading" });
     setTeamSlack({ status: "idle" });
     setPersonSlack({});
-    const result = await apiPost<TeamDigest>("/digest/team");
+    const result = await api<TeamDigest>(path("/digest/team"), { method: "POST" });
     if (result.ok) setLastUpdated(new Date());
     setTeam(result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error });
   }
@@ -142,18 +178,19 @@ export default function DashboardPage() {
     fetch(`${API_URL}/health`)
       .then((r) => setApiUp(r.ok))
       .catch(() => setApiUp(false));
+    api<{ integrations: Integration[] }>(path("/integrations")).then((r) => r.ok && setIntegrations(r.data.integrations));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function sendTeamToSlack() {
     setTeamSlack({ status: "sending" });
-    const result = await apiPost("/slack/deliver-team");
+    const result = await api(path("/slack/deliver-team"), { method: "POST" });
     setTeamSlack(result.ok ? { status: "sent" } : { status: "error", error: result.error });
   }
 
   async function sendPersonToSlack(actor: string) {
     setPersonSlack((prev) => ({ ...prev, [actor]: { status: "sending" } }));
-    const result = await apiPost(`/slack/deliver?actor=${encodeURIComponent(actor)}`);
+    const result = await api(path(`/slack/deliver?actor=${encodeURIComponent(actor)}`), { method: "POST" });
     setPersonSlack((prev) => ({
       ...prev,
       [actor]: result.ok ? { status: "sent" } : { status: "error", error: result.error },
@@ -166,7 +203,9 @@ export default function DashboardPage() {
     setLookupInput("");
     if (!lookupActors.includes(actor)) setLookupActors((prev) => [...prev, actor]);
     setLookupDigests((prev) => ({ ...prev, [actor]: { status: "loading" } }));
-    const result = await apiPost<SoloDigest>(`/digest/generate?actor=${encodeURIComponent(actor)}`);
+    const result = await api<SoloDigest>(path(`/digest/generate?actor=${encodeURIComponent(actor)}`), {
+      method: "POST",
+    });
     setLookupDigests((prev) => ({
       ...prev,
       [actor]: result.ok ? { status: "done", data: result.data } : { status: "error", error: result.error },
@@ -183,7 +222,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Sidebar attentionCount={attentionCount} />
+      <Sidebar attentionCount={attentionCount} workspace={workspace} />
 
       <div className="lg:pl-60">
         {/* Top bar */}
@@ -194,7 +233,7 @@ export default function DashboardPage() {
                 <LogoMark className="h-7 w-7" />
               </Link>
               <nav className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-                <span className="hidden truncate sm:inline">Acme Inc.</span>
+                <span className="hidden truncate sm:inline">{workspace.name}</span>
                 <span className="hidden sm:inline">/</span>
                 <span className="truncate font-medium text-foreground">Daily digest</span>
               </nav>
@@ -391,7 +430,7 @@ export default function DashboardPage() {
             {/* Integrations */}
             <section id="integrations" className="scroll-mt-20 pb-8">
               <SectionHeading title="Integrations" description="Where Team Pulse reads activity and delivers digests." />
-              <IntegrationsTable />
+              <IntegrationsTable live={DEMO_MODE ? null : integrations} />
             </section>
           </div>
         </main>
@@ -410,7 +449,7 @@ const NAV: { href: string; label: string; icon: LucideIcon; countKey?: boolean }
   { href: "#integrations", label: "Integrations", icon: Plug },
 ];
 
-function Sidebar({ attentionCount }: { attentionCount: number }) {
+function Sidebar({ attentionCount, workspace }: { attentionCount: number; workspace: Workspace }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r bg-card lg:flex">
       <div className="flex h-14 items-center border-b px-5">
@@ -453,17 +492,61 @@ function Sidebar({ attentionCount }: { attentionCount: number }) {
         >
           <Github className="h-4 w-4" /> Source on GitHub
         </a>
-        <div className="flex items-center gap-2.5 rounded-md border bg-background p-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-xs font-semibold text-white">
-            A
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">Acme Inc.</p>
-            <p className="truncate text-xs text-muted-foreground">{DEMO_MODE ? "Demo workspace" : "Workspace"}</p>
-          </div>
-        </div>
+        <WorkspaceSwitcher workspace={workspace} />
       </div>
     </aside>
+  );
+}
+
+function WorkspaceSwitcher({ workspace }: { workspace: Workspace }) {
+  const { state, selectWorkspace, signOut } = useSession();
+  const workspaces = state.status === "ready" ? state.me.workspaces : [workspace];
+  const email = state.status === "ready" ? state.me.user.email : null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2.5 rounded-md border bg-background p-2">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-xs font-semibold text-white">
+          {workspace.name.trim().charAt(0).toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          {workspaces.length > 1 ? (
+            <select
+              aria-label="Switch workspace"
+              value={workspace.id}
+              onChange={(e) => selectWorkspace(e.target.value)}
+              className="w-full truncate bg-transparent text-sm font-medium focus:outline-none"
+            >
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="truncate text-sm font-medium">{workspace.name}</p>
+          )}
+          <p className="truncate text-xs text-muted-foreground">
+            {DEMO_MODE ? "Demo workspace" : `${workspace.role[0].toUpperCase()}${workspace.role.slice(1)}`}
+          </p>
+        </div>
+      </div>
+      {!DEMO_MODE && (
+        <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+          <span className="truncate" title={email ?? undefined}>
+            {email}
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <Link href="/onboarding" title="New workspace" className="rounded p-1 hover:bg-secondary hover:text-foreground">
+              <Plus className="h-3.5 w-3.5" />
+            </Link>
+            <button onClick={signOut} title="Sign out" className="rounded p-1 hover:bg-secondary hover:text-foreground">
+              <LogOut className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -658,7 +741,10 @@ const INTEGRATIONS: { key: string; method: string; detail: string; connected: bo
   { key: "slack", method: "Bot · chat:write", detail: "Daily digest at 09:00 UTC", connected: true },
 ];
 
-function IntegrationsTable() {
+/** `live` is the workspace's real connection status (null = show the demo's static view). */
+function IntegrationsTable({ live }: { live: Integration[] | null }) {
+  const connectedNow = (key: string, fallback: boolean) =>
+    live ? Boolean(live.find((i) => i.provider === key)?.connected) : fallback;
   return (
     <div className="overflow-hidden rounded-lg border bg-card shadow-xs">
       <table className="w-full text-sm">
@@ -686,8 +772,10 @@ function IntegrationsTable() {
                 <td className="hidden px-5 py-3 text-muted-foreground sm:table-cell">{method}</td>
                 <td className="hidden px-5 py-3 text-muted-foreground md:table-cell">{detail}</td>
                 <td className="px-5 py-3 text-right">
-                  {connected ? (
+                  {connectedNow(key, connected) ? (
                     <Badge variant="success">Connected</Badge>
+                  ) : live && key !== "figma" ? (
+                    <Badge variant="outline">Not connected</Badge>
                   ) : (
                     <Badge variant="outline">Requires paid plan</Badge>
                   )}
@@ -736,7 +824,7 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
       <p className="mt-1 max-w-sm text-sm text-muted-foreground">
         {quiet
           ? "No team activity was recorded in the window. Push a commit, open a PR, or update a ticket, then try again."
-          : `${error} Check that the API is running and the API key is set.`}
+          : `${error} Check that the API is running, then try again.`}
       </p>
       <Button variant="outline" className="mt-5" onClick={onRetry}>
         <RefreshCw className="h-4 w-4" /> Try again

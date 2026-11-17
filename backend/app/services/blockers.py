@@ -6,7 +6,7 @@ BLOCKER_THRESHOLD_HOURS = 48
 _LOOKBACK_DAYS = 30
 
 
-def find_blockers(threshold_hours: float = BLOCKER_THRESHOLD_HOURS) -> list[dict]:
+def find_blockers(workspace_id: str, threshold_hours: float = BLOCKER_THRESHOLD_HOURS) -> list[dict]:
     """Flag Linear issues whose most recent activity is 'started' and stale.
 
     An issue that was started but has seen no further event (comment,
@@ -18,6 +18,7 @@ def find_blockers(threshold_hours: float = BLOCKER_THRESHOLD_HOURS) -> list[dict
     result = (
         supabase.table("activity_events")
         .select("*")
+        .eq("workspace_id", workspace_id)
         .eq("source", "linear")
         .gte("received_at", since.isoformat())
         .order("received_at")

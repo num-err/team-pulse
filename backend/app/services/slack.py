@@ -1,9 +1,11 @@
 import logging
+from dataclasses import dataclass
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from app.config import get_settings
+from app.services.workspaces import get_integration
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +18,34 @@ logger = logging.getLogger(__name__)
 _CONNECTION_ERRORS = OSError
 
 
-def _client() -> WebClient:
-    return WebClient(token=get_settings().slack_bot_token)
+class SlackNotConfigured(RuntimeError):
+    """The workspace has no Slack bot token / channel to post with."""
 
 
-def post_digest(digest: dict, channel: str | None = None) -> str:
-    """Post a digest summary to Slack. Returns the message timestamp."""
+@dataclass(frozen=True)
+class SlackDestination:
+    token: str
+    channel: str
+
+
+def slack_destination(workspace_id: str, channel_override: str | None = None) -> SlackDestination:
+    """Where this workspace's digests go: its own Slack integration
+    (bot token + channel), with the env-level token/channel as a
+    development-only fallback."""
     settings = get_settings()
-    target = channel or settings.slack_default_channel
+    integration = get_integration(workspace_id, "slack") or {}
+    token = (integration.get("credentials") or {}).get("bot_token")
+    channel = channel_override or (integration.get("settings") or {}).get("channel")
+    if not settings.is_production:
+        token = token or settings.slack_bot_token
+        channel = channel or settings.slack_default_channel
+    if not token or not channel:
+        raise SlackNotConfigured("Slack isn't connected for this workspace yet (needs a bot token and a channel).")
+    return SlackDestination(token=token, channel=channel)
+
+
+def post_digest(digest: dict, dest: SlackDestination) -> str:
+    """Post one person's digest to Slack. Returns the message timestamp."""
 
     blocks = [
         {
@@ -45,14 +67,14 @@ def post_digest(digest: dict, channel: str | None = None) -> str:
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"{digest['event_count']} GitHub event{'s' if digest['event_count'] != 1 else ''} · via Team Pulse",
+                    "text": f"{digest['event_count']} event{'s' if digest['event_count'] != 1 else ''} · via Team Pulse",
                 }
             ],
         },
     ]
 
     try:
-        response = _client().chat_postMessage(channel=target, blocks=blocks, text=digest["summary"])
+        response = WebClient(token=dest.token).chat_postMessage(channel=dest.channel, blocks=blocks, text=digest["summary"])
         return response["ts"]
     except SlackApiError as exc:
         logger.error("Slack API error posting digest for %s: %s", digest.get("actor"), exc.response["error"])
@@ -62,10 +84,8 @@ def post_digest(digest: dict, channel: str | None = None) -> str:
         raise RuntimeError(f"could not reach Slack: {exc}") from exc
 
 
-def post_team_digest(team_digest: dict, channel: str | None = None) -> str:
+def post_team_digest(team_digest: dict, dest: SlackDestination) -> str:
     """Post a team-level digest to Slack. Returns the message timestamp."""
-    settings = get_settings()
-    target = channel or settings.slack_default_channel
 
     blocks: list[dict] = [
         {
@@ -126,8 +146,8 @@ def post_team_digest(team_digest: dict, channel: str | None = None) -> str:
     })
 
     try:
-        response = _client().chat_postMessage(
-            channel=target, blocks=blocks, text=team_digest["team_summary"]
+        response = WebClient(token=dest.token).chat_postMessage(
+            channel=dest.channel, blocks=blocks, text=team_digest["team_summary"]
         )
         return response["ts"]
     except SlackApiError as exc:

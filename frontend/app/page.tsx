@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Logo, LogoMark } from "@/components/logo";
 import { IntegrationsStrip } from "@/components/integrations-strip";
 import { HealthBadge, HEALTH_META, type HealthState } from "@/components/health-badge";
+import { DEMO_MODE } from "@/lib/demo";
 
 const REPO_URL = "https://github.com/num-err/team-pulse";
 
@@ -105,6 +106,11 @@ export default function Home() {
                 <Github className="h-4 w-4" /> GitHub
               </a>
             </Button>
+            {!DEMO_MODE && (
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/login">Sign in</Link>
+              </Button>
+            )}
             <Button asChild size="sm">
               <Link href="/dashboard">
                 View live demo <ArrowRight className="h-3.5 w-3.5" />

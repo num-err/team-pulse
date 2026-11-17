@@ -129,14 +129,23 @@ EVENTS = [
 ]
 
 
-def main() -> None:
+def main(workspace_id: str) -> None:
     supabase = get_supabase()
-    # Clear prior demo rows first so reruns before each demo don't pile up
-    # duplicate events / inflate counts / double the narrative.
-    supabase.table("activity_events").delete().eq("metadata->>demo_seed", "true").execute()
-    supabase.table("activity_events").insert(EVENTS).execute()
+    # Clear prior demo rows (in this workspace only) so reruns don't pile up.
+    (
+        supabase.table("activity_events")
+        .delete()
+        .eq("workspace_id", workspace_id)
+        .eq("metadata->>demo_seed", "true")
+        .execute()
+    )
+    supabase.table("activity_events").insert([{**e, "workspace_id": workspace_id} for e in EVENTS]).execute()
     print(f"Seeded {len(EVENTS)} demo events across github, linear, figma, notion (3 actors).")
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) != 2:
+        sys.exit("usage: seed_demo_events.py <workspace_id>")
+    main(sys.argv[1])
